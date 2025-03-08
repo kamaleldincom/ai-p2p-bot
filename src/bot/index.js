@@ -1,10 +1,18 @@
 /**
+ * src/bot/index.js
  * Main bot initialization file
  */
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const mongoose = require('mongoose');
-const { handleMessage } = require('./handlers');
+const { 
+  handleMessage, 
+  handlePhoto, 
+  handleStart, 
+  handleTransfer, 
+  handleProfile, 
+  handleReport 
+} = require('./handlers');
 
 // Initialize bot
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
@@ -12,7 +20,14 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('Connected to MongoDB'))
-  .catch(err => console.error('MongoDB connection error:', err));
+  .catch(err => {
+    console.error('MongoDB connection error details:', {
+      message: err.message,
+      code: err.code,
+      name: err.name,
+      stack: err.stack
+    });
+  });
 
 // Error handling
 bot.catch((err, ctx) => {
@@ -20,8 +35,15 @@ bot.catch((err, ctx) => {
   ctx.reply('An error occurred. Please try again later.');
 });
 
+// Command handlers
+bot.start(handleStart);
+bot.command('transfer', handleTransfer);
+bot.command('profile', handleProfile);
+bot.command('report', handleReport);
+
 // Message handlers
 bot.on('text', handleMessage);
+bot.on('photo', handlePhoto);
 
 // Launch bot
 bot.launch()
