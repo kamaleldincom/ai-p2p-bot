@@ -1,6 +1,6 @@
 /**
  * src/ai/functions.js
- * Define AI function schema definitions (with updateTransferRequest added)
+ * Define AI function schema definitions with messaging support
  */
 const functionDefinitions = [
   {
@@ -230,8 +230,8 @@ const functionDefinitions = [
     }
   },
   {
-    name: "matchTransaction",
-    description: "Match a transaction with another user",
+    name: "initiateMatchRequest",
+    description: "Send a match request that requires confirmation from the other party",
     parameters: {
       type: "object",
       properties: {
@@ -249,6 +249,68 @@ const functionDefinitions = [
         }
       },
       required: ["userId", "transactionId", "partnerTransactionId"]
+    }
+  },
+  {
+    name: "confirmMatchRequest",
+    description: "Confirm or reject a match request",
+    parameters: {
+      type: "object",
+      properties: {
+        userId: {
+          type: "string",
+          description: "Telegram user ID confirming the match"
+        },
+        transactionId: {
+          type: "string", 
+          description: "User's transaction ID"
+        },
+        accept: {
+          type: "boolean",
+          description: "Whether to accept the match request"
+        }
+      },
+      required: ["userId", "transactionId", "accept"]
+    }
+  },
+  {
+    name: "sendMessage",
+    description: "Send a message to transaction partner",
+    parameters: {
+      type: "object",
+      properties: {
+        userId: {
+          type: "string",
+          description: "Telegram user ID sending the message"
+        },
+        transactionId: {
+          type: "string",
+          description: "Transaction ID"
+        },
+        message: {
+          type: "string",
+          description: "Message content to send"
+        }
+      },
+      required: ["userId", "transactionId", "message"]
+    }
+  },
+  {
+    name: "getMessages",
+    description: "Get message history for a transaction",
+    parameters: {
+      type: "object",
+      properties: {
+        userId: {
+          type: "string",
+          description: "Telegram user ID"
+        },
+        transactionId: {
+          type: "string",
+          description: "Transaction ID"
+        }
+      },
+      required: ["userId", "transactionId"]
     }
   },
   {

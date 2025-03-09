@@ -1,7 +1,19 @@
 /**
- * Transaction model definition
+ * Transaction model definition with messaging support
  */
 const mongoose = require('mongoose');
+
+const messageSchema = new mongoose.Schema({
+  fromUserId: String,
+  fromUserName: String,
+  toUserId: String,
+  message: String,
+  timestamp: Date,
+  read: {
+    type: Boolean,
+    default: false
+  }
+});
 
 const transactionSchema = new mongoose.Schema({
   transactionId: {
@@ -22,7 +34,7 @@ const transactionSchema = new mongoose.Schema({
   rate: Number,
   status: {
     type: String,
-    enum: ['open', 'matched', 'proof_uploaded', 'completed', 'cancelled'],
+    enum: ['open', 'pending_match', 'matched', 'proof_uploaded', 'completed', 'cancelled'],
     default: 'open'
   },
   notes: String,
@@ -30,6 +42,12 @@ const transactionSchema = new mongoose.Schema({
     type: String,
     enum: ['referrer', 'referee', 'sibling']
   },
+  // For two-way confirmation
+  pendingPartnerTransactionId: String,
+  
+  // For messaging between users
+  messages: [messageSchema],
+  
   proofs: [{
     userId: String,
     imageId: String,
@@ -37,6 +55,7 @@ const transactionSchema = new mongoose.Schema({
   }],
   timestamps: {
     created: Date,
+    matchRequested: Date,
     matched: Date,
     completed: Date
   },

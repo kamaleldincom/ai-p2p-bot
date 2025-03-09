@@ -1,6 +1,6 @@
 /**
  * src/services/transaction.js
- * Enhanced transaction-related service functions
+ * Enhanced transaction-related service functions with two-way confirmation
  */
 const Transaction = require('../models/transaction');
 const User = require('../models/user');
@@ -16,7 +16,7 @@ async function getActiveTransaction(userId) {
         { 'initiator.userId': userId.toString() },
         { 'recipient.userId': userId.toString() }
       ],
-      status: { $in: ['open', 'matched', 'proof_uploaded'] }
+      status: { $in: ['open', 'pending_match', 'matched', 'proof_uploaded'] }
     });
 
     if (!activeTransaction) {
@@ -65,10 +65,14 @@ async function getActiveTransaction(userId) {
         notes: activeTransaction.notes,
         relationship: activeTransaction.relationship,
         partner: partner,
+        pendingConfirmation: activeTransaction.status === 'pending_match' 
+          && !isInitiator, // Check if this user needs to confirm the match
+        initiatedBy: isInitiator ? 'you' : partner ? partner.name : 'partner',
         proofs: activeTransaction.proofs.map(proof => ({
           userId: proof.userId,
           uploadedAt: proof.uploadedAt
         })),
+        messages: activeTransaction.messages || [],
         timestamps: activeTransaction.timestamps
       }
     };
@@ -89,6 +93,15 @@ async function getTransactionById(transactionId) {
       return null;
     }
     
+    // Get initiator details
+    const initiator = await User.findOne({ userId: transaction.initiator.userId });
+    
+    // Get recipient details if available
+    let recipient = null;
+    if (transaction.recipient.userId) {
+      recipient = await User.findOne({ userId: transaction.recipient.userId });
+    }
+    
     return {
       transactionId: transaction.transactionId,
       amount: transaction.initiator.amount,
@@ -96,10 +109,14 @@ async function getTransactionById(transactionId) {
       targetAmount: transaction.recipient.amount,
       targetCurrency: transaction.recipient.currency,
       initiatorId: transaction.initiator.userId,
+      initiatorName: initiator ? initiator.name : 'Unknown',
+      initiatorTrustScore: initiator ? initiator.trustScore : 0,
       recipientId: transaction.recipient.userId,
+      recipientName: recipient ? recipient.name : null,
       status: transaction.status,
       rate: transaction.rate,
-      notes: transaction.notes
+      notes: transaction.notes,
+      messages: transaction.messages || []
     };
   } catch (error) {
     console.error('Error getting transaction by ID:', error);
@@ -158,7 +175,7 @@ async function createTransferRequest(data) {
         { 'initiator.userId': data.userId.toString() },
         { 'recipient.userId': data.userId.toString() }
       ],
-      status: { $in: ['open', 'matched', 'proof_uploaded'] }
+      status: { $in: ['open', 'pending_match', 'matched', 'proof_uploaded'] }
     });
 
     if (hasActiveTransaction) {
@@ -183,7 +200,8 @@ async function createTransferRequest(data) {
       status: 'open',
       timestamps: {
         created: new Date()
-      }
+      },
+      messages: [] // Add messages array
     });
 
     await newTransaction.save();
@@ -332,6 +350,14 @@ async function findMatchingTransfers(userId, transactionId) {
       status: 'open'
     });
 
+    // If no matches found, return empty array
+    if (matches.length === 0) {
+      return {
+        success: true,
+        matches: []
+      };
+    }
+
     // Format and return matches
     const formattedMatches = [];
     for (const match of matches) {
@@ -346,6 +372,7 @@ async function findMatchingTransfers(userId, transactionId) {
         partnerId: match.initiator.userId,
         partnerName: partner ? partner.name : 'Unknown',
         partnerTrustScore: partner ? partner.trustScore : 0,
+        partnerCompletedTransactions: partner ? partner.completedTransactions : 0,
         relationship: relationship,
         amount: match.initiator.amount,
         currency: match.initiator.currency,
@@ -383,9 +410,9 @@ async function getRelationshipLabel(userId, partnerId) {
 }
 
 /**
- * Match a transaction with another user's transaction
+ * Initiate a match request (first step in two-way confirmation)
  */
-async function matchTransaction(userId, transactionId, partnerTransactionId) {
+async function initiateMatchRequest(userId, transactionId, partnerTransactionId) {
   try {
     // Get the transactions
     const userTransaction = await Transaction.findOne({ transactionId });
@@ -400,9 +427,9 @@ async function matchTransaction(userId, transactionId, partnerTransactionId) {
       return { success: false, message: "You are not authorized to match this transaction" };
     }
 
-    // Check if transactions are already matched
+    // Check if transactions are already matched or pending
     if (userTransaction.status !== 'open' || partnerTransaction.status !== 'open') {
-      return { success: false, message: "One or both transactions are already matched or completed" };
+      return { success: false, message: "One or both transactions are already matched or in progress" };
     }
 
     // Verify network relationship
@@ -411,21 +438,14 @@ async function matchTransaction(userId, transactionId, partnerTransactionId) {
       return { success: false, message: relationship.message };
     }
 
-    // Match the transactions
+    // Set transactions to pending match status
     userTransaction.recipient.userId = partnerTransaction.initiator.userId;
-    userTransaction.status = 'matched';
+    userTransaction.status = 'pending_match';
     userTransaction.relationship = relationship.relationship;
-    userTransaction.timestamps.matched = new Date();
-
-    partnerTransaction.recipient.userId = userId.toString();
-    partnerTransaction.status = 'matched';
-    partnerTransaction.relationship = relationship.relationship === 'referrer' 
-      ? 'referee' 
-      : (relationship.relationship === 'referee' ? 'referrer' : 'sibling');
-    partnerTransaction.timestamps.matched = new Date();
+    userTransaction.pendingPartnerTransactionId = partnerTransactionId;
+    userTransaction.timestamps.matchRequested = new Date();
 
     await userTransaction.save();
-    await partnerTransaction.save();
 
     // Get partner details
     const partner = await User.findOne({ userId: partnerTransaction.initiator.userId });
@@ -437,6 +457,7 @@ async function matchTransaction(userId, transactionId, partnerTransactionId) {
         partnerId: partner.userId,
         partnerName: partner.name,
         partnerTrustScore: partner.trustScore,
+        partnerCompletedTransactions: partner.completedTransactions,
         relationship: relationship.relationship,
         amount: userTransaction.initiator.amount,
         currency: userTransaction.initiator.currency,
@@ -446,7 +467,180 @@ async function matchTransaction(userId, transactionId, partnerTransactionId) {
       }
     };
   } catch (error) {
-    console.error('Error matching transaction:', error);
+    console.error('Error initiating match request:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Confirm a match request (second step in two-way confirmation)
+ */
+async function confirmMatchRequest(userId, transactionId, accept) {
+  try {
+    // Find the user's transaction
+    const userTransaction = await Transaction.findOne({ 
+      transactionId,
+      'initiator.userId': userId.toString(),
+      status: 'open'
+    });
+    
+    if (!userTransaction) {
+      return { success: false, message: "Your transaction not found or not in open status" };
+    }
+    
+    // Find the partner's transaction that requested the match
+    const partnerTransaction = await Transaction.findOne({ 
+      'recipient.userId': userId.toString(),
+      'status': 'pending_match'
+    });
+    
+    if (!partnerTransaction) {
+      return { success: false, message: "No pending match request found" };
+    }
+    
+    if (!accept) {
+      // Reject the match
+      partnerTransaction.recipient.userId = null;
+      partnerTransaction.status = 'open';
+      partnerTransaction.pendingPartnerTransactionId = null;
+      
+      await partnerTransaction.save();
+      
+      return { success: true, accepted: false };
+    }
+    
+    // Accept the match - update both transactions
+    const partnerTransactionId = partnerTransaction.transactionId;
+    
+    // Update partner's transaction
+    partnerTransaction.status = 'matched';
+    partnerTransaction.timestamps.matched = new Date();
+    
+    // Update user's transaction
+    userTransaction.recipient.userId = partnerTransaction.initiator.userId;
+    userTransaction.status = 'matched';
+    userTransaction.relationship = partnerTransaction.relationship === 'referrer' 
+      ? 'referee' 
+      : (partnerTransaction.relationship === 'referee' ? 'referrer' : 'sibling');
+    userTransaction.timestamps.matched = new Date();
+    
+    await Promise.all([
+      partnerTransaction.save(),
+      userTransaction.save()
+    ]);
+    
+    // Get partner details
+    const partner = await User.findOne({ userId: partnerTransaction.initiator.userId });
+    
+    return {
+      success: true,
+      accepted: true,
+      match: {
+        transactionId: userTransaction.transactionId,
+        partnerTransactionId: partnerTransactionId,
+        partnerId: partner.userId,
+        partnerName: partner.name,
+        partnerTrustScore: partner.trustScore,
+        relationship: userTransaction.relationship,
+        amount: userTransaction.initiator.amount,
+        currency: userTransaction.initiator.currency,
+        partnerAmount: partnerTransaction.initiator.amount,
+        partnerCurrency: partnerTransaction.initiator.currency,
+        rate: partnerTransaction.rate
+      }
+    };
+  } catch (error) {
+    console.error('Error confirming match request:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Send a message to transaction partner
+ */
+async function sendMessage(userId, transactionId, message) {
+  try {
+    // Find the transaction
+    const transaction = await Transaction.findOne({
+      $or: [
+        { transactionId, 'initiator.userId': userId.toString() },
+        { transactionId, 'recipient.userId': userId.toString() }
+      ],
+      status: { $in: ['matched', 'proof_uploaded'] }
+    });
+    
+    if (!transaction) {
+      return { 
+        success: false, 
+        message: "Transaction not found, or you are not part of it, or it's not in matched status" 
+      };
+    }
+    
+    // Determine sender and recipient
+    const isInitiator = transaction.initiator.userId === userId.toString();
+    const recipientId = isInitiator ? transaction.recipient.userId : transaction.initiator.userId;
+    
+    // Get user info
+    const user = await User.findOne({ userId: userId.toString() });
+    
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+    
+    // Initialize messages array if it doesn't exist
+    if (!transaction.messages) {
+      transaction.messages = [];
+    }
+    
+    // Add the message
+    const messageObj = {
+      fromUserId: userId.toString(),
+      fromUserName: user.name,
+      toUserId: recipientId,
+      message: message,
+      timestamp: new Date()
+    };
+    
+    transaction.messages.push(messageObj);
+    await transaction.save();
+    
+    return {
+      success: true,
+      message: messageObj
+    };
+  } catch (error) {
+    console.error('Error sending message:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Get messages for a transaction
+ */
+async function getMessages(userId, transactionId) {
+  try {
+    // Find the transaction
+    const transaction = await Transaction.findOne({
+      $or: [
+        { transactionId, 'initiator.userId': userId.toString() },
+        { transactionId, 'recipient.userId': userId.toString() }
+      ]
+    });
+    
+    if (!transaction) {
+      return { 
+        success: false, 
+        message: "Transaction not found or you are not part of it" 
+      };
+    }
+    
+    // Return messages or empty array
+    return {
+      success: true,
+      messages: transaction.messages || []
+    };
+  } catch (error) {
+    console.error('Error getting messages:', error);
     return { success: false, error: error.message };
   }
 }
@@ -639,7 +833,10 @@ module.exports = {
   createTransferRequest,
   updateTransferRequest,
   findMatchingTransfers,
-  matchTransaction,
+  initiateMatchRequest,
+  confirmMatchRequest,
+  sendMessage,
+  getMessages,
   uploadProofOfPayment,
   completeTransaction,
   reportIssue,

@@ -1,6 +1,6 @@
 /**
  * src/middleware/session.js
- * Middleware for handling user sessions with improved user verification
+ * Middleware for handling user sessions with improved user verification and state management
  */
 const userService = require('../services/user');
 const { getSystemPrompt } = require('../ai/prompt');
@@ -8,9 +8,12 @@ const { getSystemPrompt } = require('../ai/prompt');
 // Store for conversation histories
 const conversations = {};
 
+// Store for user session states
+const sessionStates = {};
+
 /**
  * Middleware that ensures user identification and conversation tracking
- * with enhanced first-user detection
+ * with enhanced state management
  */
 async function sessionMiddleware(ctx, next) {
     try {
@@ -36,8 +39,31 @@ async function sessionMiddleware(ctx, next) {
       const userExists = await userService.checkUserExists(userId);
       console.log(`User ${userId} exists in database:`, userExists.exists);
       
-      // Add user status to conversation context
-      ctx.state.userExists = userExists.exists;
+      // Initialize session state if it doesn't exist
+      if (!sessionStates[userId]) {
+        sessionStates[userId] = {
+          userExists: userExists.exists,
+          summaryShown: false,
+          inTransferCreation: false,
+          awaitingMatchSelection: false,
+          awaitingTransferAmount: false,
+          awaitingDestinationCurrency: false,
+          activeTransactionId: null,
+          availableMatches: null,
+          transferAmount: null,
+          transferCurrency: null
+        };
+      } else {
+        // Keep userExists up to date
+        sessionStates[userId].userExists = userExists.exists;
+      }
+      
+      // Make session state accessible in the context
+      ctx.state = { 
+        ...ctx.state,
+        ...sessionStates[userId],
+        userId
+      };
       
       // Initialize conversation if it doesn't exist
       if (!conversations[userId]) {
@@ -51,7 +77,35 @@ async function sessionMiddleware(ctx, next) {
       
       // Make conversations accessible in the context
       ctx.state.conversations = conversations;
-      ctx.state.userId = userId;
+      
+      // Save updated state after request handling
+      const originalNext = next;
+      next = async () => {
+        try {
+          await originalNext();
+        } finally {
+          // Preserve state for next request
+          sessionStates[userId] = {
+            userExists: ctx.state.userExists,
+            summaryShown: ctx.state.summaryShown,
+            inTransferCreation: ctx.state.inTransferCreation,
+            awaitingMatchSelection: ctx.state.awaitingMatchSelection,
+            awaitingTransferAmount: ctx.state.awaitingTransferAmount,
+            awaitingDestinationCurrency: ctx.state.awaitingDestinationCurrency,
+            activeTransactionId: ctx.state.activeTransactionId,
+            availableMatches: ctx.state.availableMatches,
+            transferAmount: ctx.state.transferAmount,
+            transferCurrency: ctx.state.transferCurrency
+          };
+          
+          console.log(`Updated session state for user ${userId}:`, {
+            userExists: sessionStates[userId].userExists,
+            summaryShown: sessionStates[userId].summaryShown,
+            inTransferCreation: sessionStates[userId].inTransferCreation,
+            awaitingMatchSelection: sessionStates[userId].awaitingMatchSelection
+          });
+        }
+      };
       
       return next();
     } catch (error) {

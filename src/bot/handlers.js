@@ -1,13 +1,13 @@
 /**
  * src/bot/handlers.js
- * Enhanced message handlers with improved user flows
+ * Enhanced message handlers with messaging between users
  */
 const { OpenAI } = require('openai');
 const { getSystemPrompt } = require('../ai/prompt');
 const { functionDefinitions } = require('../ai/functions');
 const userService = require('../services/user');
 const transactionService = require('../services/transaction');
-const { formatCurrency } = require('../utils/helpers');
+const { formatCurrency, parseAmountAndCurrency } = require('../utils/helpers');
 
 // Bot instance reference for sending notifications to users
 let botInstance = null;
@@ -32,13 +32,59 @@ async function handleMessage(ctx) {
     const conversations = ctx.state.conversations;
     
     console.log(`Message from ${userId}: ${message}`);
+    console.log(`User exists: ${ctx.state.userExists}, Summary shown: ${ctx.state.summaryShown}`);
     
-    // Add user message to conversation
-    conversations[userId].push({ role: "user", content: message });
+    // Check if this is a command (starts with /)
+    const isCommand = message.startsWith('/');
+    
+    // Check if user is in messaging mode and this is not a command
+    if (ctx.state.inMessagingMode && !isCommand) {
+      await handlePartnerMessage(ctx, message);
+      return;
+    }
+    
+    if (!isCommand) {
+      // Add user message to conversation
+      conversations[userId].push({ role: "user", content: message });
+      
+      // Check if this might be a match selection (a number)
+      const matchNumberMatch = message.match(/^(\d+)$/);
+      if (matchNumberMatch && ctx.state.awaitingMatchSelection) {
+        // Handle match selection
+        await handleMatchSelection(ctx, parseInt(matchNumberMatch[1]));
+        return;
+      }
 
-    // If this is a registered user, provide a summary of active trades and actions
-    // instead of waiting for AI to check this
-    if (ctx.state.userExists && !ctx.state.summaryShown) {
+      // Check if this might be a destination currency selection
+      if (ctx.state.awaitingDestinationCurrency) {
+        // Handle currency selection
+        await handleDestinationCurrencySelection(ctx, message);
+        return;
+      }
+      
+      // Check if this might be a parseable amount with currency
+      const parsedAmount = parseAmountAndCurrency(message);
+      if (parsedAmount && ctx.state.awaitingTransferAmount) {
+        // Handle transfer amount input
+        await handleTransferAmount(ctx, parsedAmount);
+        return;
+      }
+
+      // Check if this is a match confirmation response
+      if (ctx.state.awaitingMatchConfirmation) {
+        if (message.toLowerCase() === 'yes' || message.toLowerCase() === 'accept') {
+          await handleMatchConfirmation(ctx, true);
+          return;
+        } else if (message.toLowerCase() === 'no' || message.toLowerCase() === 'reject') {
+          await handleMatchConfirmation(ctx, false);
+          return;
+        }
+      }
+    }
+
+    // If this is a registered user who hasn't seen the summary yet, 
+    // and this is not a command, provide a summary
+    if (ctx.state.userExists && !ctx.state.summaryShown && !isCommand) {
       await provideTradeSummary(ctx);
       return;
     }
@@ -46,7 +92,7 @@ async function handleMessage(ctx) {
     // If this is the first interaction after starting the bot
     // and the user doesn't exist in our database, we can
     // provide a special welcome message
-    if (conversations[userId].length === 2 && !ctx.state.userExists) {
+    if (conversations[userId].length === 2 && !ctx.state.userExists && !isCommand) {
       const welcomeMessage = `Welcome to the P2P Transfer Bot! 👋
 
 I'm here to help you with secure peer-to-peer currency exchanges within your trusted network.
@@ -109,6 +155,9 @@ To get started, you'll need to register. If you're the first user of the system,
           functionResult = await userService.getNetworkConnections(userId);
           break;
         case "createTransferRequest":
+          // Mark that we're in the transfer creation process
+          ctx.state.inTransferCreation = true;
+          
           // Don't include rate in initial transfer creation
           // We'll use default rates instead
           functionArgs.rate = await getDefaultRate(functionArgs.currency, functionArgs.targetCurrency);
@@ -121,14 +170,14 @@ To get started, you'll need to register. If you're the first user of the system,
               functionResult.transaction.transactionId
             );
             
-            // If matches found, notify the user and the other parties
+            // Only add matches to the result if there are actual matches
             if (matches.success && matches.matches && matches.matches.length > 0) {
               // Append the matches to the function result
               functionResult.matches = matches.matches;
               
               // Send notifications to users with matching transactions
               for (const match of matches.matches) {
-                await notifyUserOfMatch(match.partnerId, userId, match.transactionId, functionResult.transaction.transactionId);
+                await notifyUserOfPotentialMatch(match.partnerId, userId, match.transactionId, functionResult.transaction.transactionId);
               }
             }
           }
@@ -142,22 +191,67 @@ To get started, you'll need to register. If you're the first user of the system,
             functionArgs.transactionId
           );
           break;
-        case "matchTransaction":
-          functionResult = await transactionService.matchTransaction(
+        case "initiateMatchRequest":
+          functionResult = await transactionService.initiateMatchRequest(
             userId, 
             functionArgs.transactionId, 
             functionArgs.partnerTransactionId
           );
           
-          // If match successful, notify the other user
+          // If match initiation successful, notify the other user to confirm
           if (functionResult.success) {
-            await notifyUserOfMatchConfirmation(
-              functionResult.match.partnerId, 
-              userId, 
+            await notifyUserOfMatchRequest(
+              functionResult.match.partnerId,
+              userId,
               functionArgs.partnerTransactionId,
-              functionArgs.transactionId
+              functionArgs.transactionId,
+              functionResult.match
             );
           }
+          break;
+        case "confirmMatchRequest":
+          functionResult = await transactionService.confirmMatchRequest(
+            userId, 
+            functionArgs.transactionId, 
+            functionArgs.accept
+          );
+          
+          // Reset awaiting match confirmation flag
+          ctx.state.awaitingMatchConfirmation = false;
+          
+          // If match confirmation successful, notify the other user
+          if (functionResult.success && functionResult.accepted) {
+            await notifyUserOfMatchConfirmation(
+              functionResult.match.partnerId,
+              userId,
+              functionResult.match.partnerTransactionId,
+              functionResult.match.transactionId
+            );
+          }
+          break;
+        case "sendMessage":
+          functionResult = await transactionService.sendMessage(
+            userId,
+            functionArgs.transactionId,
+            functionArgs.message
+          );
+          
+          // If message sent successfully, notify the recipient
+          if (functionResult.success) {
+            await notifyUserOfNewMessage(
+              functionResult.message.toUserId,
+              functionResult.message.fromUserId,
+              functionResult.message.fromUserName,
+              functionArgs.transactionId,
+              functionResult.message.message
+            );
+          }
+          break;
+        case "getMessages":
+          functionResult = await transactionService.getMessages(
+            userId,
+            functionArgs.transactionId
+          );
           break;
         case "uploadProofOfPayment":
           functionResult = await transactionService.uploadProofOfPayment(
@@ -245,6 +339,21 @@ To get started, you'll need to register. If you're the first user of the system,
       });
       
       await ctx.reply(newResponseContent);
+      
+      // If we're in transfer creation and got real matches, set flag to await selection
+      if (functionName === "createTransferRequest" && functionResult.success && 
+          functionResult.matches && functionResult.matches.length > 0) {
+        ctx.state.awaitingMatchSelection = true;
+        ctx.state.activeTransactionId = functionResult.transaction.transactionId;
+        ctx.state.availableMatches = functionResult.matches;
+      }
+      
+      // If we found no matches, clear the flag
+      if (functionName === "findMatchingTransfers" && 
+          (!functionResult.matches || functionResult.matches.length === 0)) {
+        ctx.state.awaitingMatchSelection = false;
+        ctx.state.availableMatches = null;
+      }
     } else {
       // Add response to conversation
       conversations[userId].push({
@@ -256,6 +365,376 @@ To get started, you'll need to register. If you're the first user of the system,
     }
   } catch (error) {
     console.error('Error handling message:', error);
+    await ctx.reply('An error occurred. Please try again later.');
+  }
+}
+
+/**
+ * Handle messaging with transaction partner
+ */
+async function handlePartnerMessage(ctx, message) {
+  try {
+    const userId = ctx.state.userId;
+    const conversations = ctx.state.conversations;
+    
+    // Get active transaction
+    const activeTransaction = await transactionService.getActiveTransaction(userId);
+    
+    if (!activeTransaction.exists || 
+        (activeTransaction.transaction.status !== 'matched' && 
+         activeTransaction.transaction.status !== 'proof_uploaded')) {
+      await ctx.reply("You don't have an active matched transaction to send messages.");
+      ctx.state.inMessagingMode = false;
+      return;
+    }
+    
+    // Send the message
+    const result = await transactionService.sendMessage(
+      userId,
+      activeTransaction.transaction.transactionId,
+      message
+    );
+    
+    if (result.success) {
+      // Add to conversation
+      conversations[userId].push({
+        role: "user",
+        content: `Message to partner: ${message}`
+      });
+      
+      const responseMessage = `Message sent to ${result.message.toUserId === activeTransaction.transaction.partner.userId ? 
+        activeTransaction.transaction.partner.name : 'your partner'}.`;
+      
+      conversations[userId].push({
+        role: "assistant",
+        content: responseMessage
+      });
+      
+      await ctx.reply(responseMessage);
+      
+      // Notify the recipient
+      await notifyUserOfNewMessage(
+        result.message.toUserId,
+        userId,
+        result.message.fromUserName,
+        activeTransaction.transaction.transactionId,
+        message
+      );
+    } else {
+      await ctx.reply(`Failed to send message: ${result.message || result.error}`);
+      ctx.state.inMessagingMode = false;
+    }
+  } catch (error) {
+    console.error('Error handling partner message:', error);
+    await ctx.reply('An error occurred sending your message. Please try again later.');
+    ctx.state.inMessagingMode = false;
+  }
+}
+
+/**
+ * Handle destination currency selection
+ */
+async function handleDestinationCurrencySelection(ctx, selection) {
+  try {
+    const userId = ctx.state.userId;
+    const conversations = ctx.state.conversations;
+    
+    let targetCurrency;
+    
+    // Try to parse the selection
+    if (selection === '1' || selection.toUpperCase() === 'AED') {
+      targetCurrency = 'AED';
+    } else if (selection === '2' || selection.toUpperCase() === 'SDG') {
+      targetCurrency = 'SDG';
+    } else if (selection === '3' || selection.toUpperCase() === 'EGP') {
+      targetCurrency = 'EGP';
+    } else {
+      // Invalid selection
+      await ctx.reply("Invalid selection. Please choose 1 for AED, 2 for SDG, or 3 for EGP.");
+      return;
+    }
+    
+    // Calculate default rate
+    const rate = await getDefaultRate(ctx.state.transferCurrency, targetCurrency);
+    const targetAmount = ctx.state.transferAmount * rate;
+    
+    // Create transfer request
+    const createResult = await transactionService.createTransferRequest({
+      userId: userId,
+      amount: ctx.state.transferAmount,
+      currency: ctx.state.transferCurrency,
+      targetCurrency: targetCurrency,
+      rate: rate
+    });
+    
+    // Reset state
+    ctx.state.awaitingDestinationCurrency = false;
+    ctx.state.transferAmount = null;
+    ctx.state.transferCurrency = null;
+    
+    if (!createResult.success) {
+      await ctx.reply(`Failed to create transfer: ${createResult.message || createResult.error}`);
+      return;
+    }
+    
+    // Add to conversation
+    conversations[userId].push({
+      role: "assistant",
+      content: `Your transfer request for ${formatCurrency(ctx.state.transferAmount, ctx.state.transferCurrency)} to ${targetCurrency} has been successfully created!`
+    });
+    
+    // Check for matches
+    const matches = await transactionService.findMatchingTransfers(
+      userId,
+      createResult.transaction.transactionId
+    );
+    
+    if (matches.success && matches.matches && matches.matches.length > 0) {
+      // We have matches - format and display them
+      let matchesMessage = `I have found ${matches.matches.length} match${matches.matches.length > 1 ? 'es' : ''} for your transfer request. Here are the details:\n\n`;
+      
+      matches.matches.forEach((match, index) => {
+        matchesMessage += `${index + 1}. From: ${match.partnerName} (${match.relationship})\n`;
+        matchesMessage += `   Trust Score: ${match.partnerTrustScore} (${match.partnerCompletedTransactions} completed transactions)\n`;
+        matchesMessage += `   Amount: ${formatCurrency(match.amount, match.currency)}\n`;
+        matchesMessage += `   Exchange Rate: 1 ${ctx.state.transferCurrency} = ${match.rate} ${targetCurrency}\n\n`;
+      });
+      
+      matchesMessage += `Would you like to proceed with one of these matches? Reply with the number (e.g., "1" for the first match).`;
+      
+      // Set state for match selection
+      ctx.state.awaitingMatchSelection = true;
+      ctx.state.activeTransactionId = createResult.transaction.transactionId;
+      ctx.state.availableMatches = matches.matches;
+      
+      // Add to conversation
+      conversations[userId].push({
+        role: "assistant",
+        content: matchesMessage
+      });
+      
+      await ctx.reply(matchesMessage);
+      
+      // Send notifications to potential match partners
+      for (const match of matches.matches) {
+        await notifyUserOfPotentialMatch(
+          match.partnerId,
+          userId,
+          match.transactionId,
+          createResult.transaction.transactionId
+        );
+      }
+    } else {
+      // No matches found
+      const message = `Your transfer request for ${formatCurrency(createResult.transaction.amount, createResult.transaction.currency)} to ${formatCurrency(createResult.transaction.targetAmount, createResult.transaction.targetCurrency)} has been created.
+
+No matching transactions found at the moment. I'll notify you when a match becomes available.
+
+Transaction ID: #${createResult.transaction.transactionId}
+Exchange Rate: 1 ${createResult.transaction.currency} = ${createResult.transaction.rate} ${createResult.transaction.targetCurrency}`;
+
+      // Add to conversation
+      conversations[userId].push({
+        role: "assistant",
+        content: message
+      });
+      
+      await ctx.reply(message);
+    }
+  } catch (error) {
+    console.error('Error handling destination currency selection:', error);
+    await ctx.reply('An error occurred. Please try again later.');
+  }
+}
+
+/**
+ * Handle match confirmation
+ */
+async function handleMatchConfirmation(ctx, accept) {
+  try {
+    const userId = ctx.state.userId;
+    const conversations = ctx.state.conversations;
+    
+    // Confirm or reject the match
+    const result = await transactionService.confirmMatchRequest(
+      userId,
+      ctx.state.transactionToConfirm,
+      accept
+    );
+    
+    // Reset state
+    ctx.state.awaitingMatchConfirmation = false;
+    ctx.state.transactionToConfirm = null;
+    
+    if (!result.success) {
+      await ctx.reply(`Failed to process match confirmation: ${result.message || result.error}`);
+      return;
+    }
+    
+    if (!result.accepted) {
+      // Match rejected
+      const message = "You have declined the match request. The other user will be notified.";
+      
+      // Add to conversation
+      conversations[userId].push({
+        role: "user",
+        content: "No, I don't want to accept this match."
+      });
+      
+      conversations[userId].push({
+        role: "assistant",
+        content: message
+      });
+      
+      await ctx.reply(message);
+      
+      // Notify the other user
+      await notifyUserOfMatchRejection(
+        ctx.state.partnerUserId,
+        userId,
+        ctx.state.partnerTransactionId
+      );
+      
+      return;
+    }
+    
+    // Match accepted
+    const message = `Match confirmed! ✅
+
+You've been matched with ${result.match.partnerName}.
+
+Transaction details:
+• Your amount: ${formatCurrency(result.match.amount, result.match.currency)}
+• Partner amount: ${formatCurrency(result.match.partnerAmount, result.match.partnerCurrency)}
+• Exchange rate: ${result.match.rate}
+
+You can now communicate with your partner to arrange the payment. Use /message to start a conversation.`;
+    
+    // Add to conversation
+    conversations[userId].push({
+      role: "user",
+      content: "Yes, I accept this match."
+    });
+    
+    conversations[userId].push({
+      role: "assistant",
+      content: message
+    });
+    
+    await ctx.reply(message);
+    
+    // Notify the other user
+    await notifyUserOfMatchConfirmation(
+      result.match.partnerId,
+      userId,
+      result.match.partnerTransactionId,
+      result.match.transactionId
+    );
+  } catch (error) {
+    console.error('Error handling match confirmation:', error);
+    await ctx.reply('An error occurred. Please try again later.');
+  }
+}
+
+/**
+ * Handle a match selection from the user
+ */
+async function handleMatchSelection(ctx, matchNumber) {
+  try {
+    const userId = ctx.state.userId;
+    const conversations = ctx.state.conversations;
+    
+    // Validate selection
+    if (!ctx.state.availableMatches || !ctx.state.activeTransactionId ||
+        matchNumber < 1 || matchNumber > ctx.state.availableMatches.length) {
+      await ctx.reply("Invalid selection. Please try again or use /transfer to view available matches.");
+      return;
+    }
+    
+    const selectedMatch = ctx.state.availableMatches[matchNumber - 1];
+    
+    // Initiate the match request
+    const result = await transactionService.initiateMatchRequest(
+      userId,
+      ctx.state.activeTransactionId,
+      selectedMatch.transactionId
+    );
+    
+    if (result.success) {
+      // Add the selection to conversation
+      conversations[userId].push({
+        role: "user",
+        content: `I want to match with option ${matchNumber}.`
+      });
+      
+      const message = `Great choice! You are matched with ${selectedMatch.partnerName} for the transfer of ${formatCurrency(result.match.amount, result.match.currency)} to ${result.match.partnerCurrency} at a rate of ${result.match.rate}.
+
+I've sent a notification to ${selectedMatch.partnerName}. The match will be confirmed when they accept.
+
+Feel free to negotiate the exchange rate with ${selectedMatch.partnerName} if needed. Let me know once you're ready to proceed!`;
+      
+      // Add assistant response
+      conversations[userId].push({
+        role: "assistant",
+        content: message
+      });
+      
+      // Reset match selection flags
+      ctx.state.awaitingMatchSelection = false;
+      ctx.state.availableMatches = null;
+      
+      await ctx.reply(message);
+      
+      // Notify the partner
+      await notifyUserOfMatchRequest(
+        selectedMatch.partnerId,
+        userId,
+        selectedMatch.transactionId,
+        ctx.state.activeTransactionId,
+        result.match
+      );
+    } else {
+      await ctx.reply(`Failed to initiate match: ${result.message || result.error}`);
+    }
+  } catch (error) {
+    console.error('Error handling match selection:', error);
+    await ctx.reply('An error occurred. Please try again later.');
+  }
+}
+
+/**
+ * Handle transfer amount input from user
+ */
+async function handleTransferAmount(ctx, parsedAmount) {
+  try {
+    const userId = ctx.state.userId;
+    const conversations = ctx.state.conversations;
+    
+    // Confirm the amount and ask for destination currency
+    const message = `You want to transfer ${formatCurrency(parsedAmount.amount, parsedAmount.currency)}.
+
+Now, please select the destination currency:
+1. AED (UAE Dirham)
+2. SDG (Sudanese Pound) 
+3. EGP (Egyptian Pound)
+
+Reply with the number of your choice or type the currency code.`;
+    
+    // Set state for next step
+    ctx.state.transferAmount = parsedAmount.amount;
+    ctx.state.transferCurrency = parsedAmount.currency;
+    ctx.state.awaitingTransferAmount = false;
+    ctx.state.awaitingDestinationCurrency = true;
+    
+    // Add to conversation
+    conversations[userId].push({
+      role: "assistant",
+      content: message
+    });
+    
+    await ctx.reply(message);
+  } catch (error) {
+    console.error('Error handling transfer amount input:', error);
     await ctx.reply('An error occurred. Please try again later.');
   }
 }
@@ -307,6 +786,27 @@ async function provideTradeSummary(ctx) {
       welcomeMessage += `#${activeTransaction.transaction.transactionId} - Status: ${activeTransaction.transaction.status}\n`;
       welcomeMessage += `${formatCurrency(activeTransaction.transaction.amount, activeTransaction.transaction.currency)} ↔ `;
       welcomeMessage += `${formatCurrency(activeTransaction.transaction.partnerAmount, activeTransaction.transaction.partnerCurrency)}\n\n`;
+      
+      // If transaction is pending confirmation, show confirmation request
+      if (activeTransaction.transaction.status === 'pending_match' && 
+          activeTransaction.transaction.pendingConfirmation) {
+        welcomeMessage += `⚠️ You have a pending match request! Please respond with "yes" to accept or "no" to decline.\n\n`;
+        
+        // Set state to await confirmation
+        ctx.state.awaitingMatchConfirmation = true;
+        ctx.state.transactionToConfirm = activeTransaction.transaction.transactionId;
+      }
+      
+      // If transaction has messages, show unread count
+      if (activeTransaction.transaction.messages && activeTransaction.transaction.messages.length > 0) {
+        const unreadMessages = activeTransaction.transaction.messages.filter(
+          msg => msg.toUserId === userId && !msg.read
+        ).length;
+        
+        if (unreadMessages > 0) {
+          welcomeMessage += `📩 You have ${unreadMessages} unread message(s). Use /messages to view them.\n\n`;
+        }
+      }
     } else {
       welcomeMessage += `You don't have any active transactions at the moment.\n\n`;
     }
@@ -322,11 +822,21 @@ async function provideTradeSummary(ctx) {
           welcomeMessage += `🔄 Edit Transfer - Send your changes (e.g., "Change amount to 2000")\n`;
           welcomeMessage += `❌ Cancel Transfer - Cancel your current transfer\n`;
           break;
+        case 'pending_match':
+          if (activeTransaction.transaction.pendingConfirmation) {
+            welcomeMessage += `✅ Accept Match - Confirm the match request\n`;
+            welcomeMessage += `❌ Reject Match - Decline the match request\n`;
+          } else {
+            welcomeMessage += `⏳ Waiting for partner to confirm match\n`;
+          }
+          break;
         case 'matched':
+          welcomeMessage += `💬 /message - Send a message to your partner\n`;
           welcomeMessage += `📷 Upload Payment Proof - Send a photo as proof of payment\n`;
           welcomeMessage += `⚠️ /report - Report an issue with this transaction\n`;
           break;
         case 'proof_uploaded':
+          welcomeMessage += `💬 /message - Send a message to your partner\n`;
           welcomeMessage += `✅ Complete Transaction - Confirm transaction completion\n`;
           welcomeMessage += `⚠️ /report - Report an issue with this transaction\n`;
           break;
@@ -347,9 +857,9 @@ async function provideTradeSummary(ctx) {
 }
 
 /**
- * Notify a user about a matching transfer
+ * Notify a user about a potential match
  */
-async function notifyUserOfMatch(toUserId, fromUserId, toTransactionId, fromTransactionId) {
+async function notifyUserOfPotentialMatch(toUserId, fromUserId, toTransactionId, fromTransactionId) {
   try {
     if (!botInstance) {
       console.error('Bot instance not set for notifications');
@@ -365,7 +875,7 @@ async function notifyUserOfMatch(toUserId, fromUserId, toTransactionId, fromTran
     const toTransaction = await transactionService.getTransactionById(toTransactionId);
     if (!fromTransaction || !toTransaction) return;
     
-    const message = `🔔 Transfer Match Found!
+    const message = `🔔 Potential Transfer Match!
 
 A user in your network has created a transfer that matches yours:
 
@@ -376,18 +886,82 @@ Matching Transfer: #${fromTransactionId}
 From: ${fromUser.profile.name}
 ${formatCurrency(fromTransaction.amount, fromTransaction.currency)} ↔ ${formatCurrency(fromTransaction.targetAmount, fromTransaction.targetCurrency)}
 
-To accept this match, use /transfer and select this offer.`;
+Use /transfer to view and accept this match.`;
     
     await botInstance.telegram.sendMessage(toUserId, message);
     return true;
   } catch (error) {
-    console.error('Error sending match notification:', error);
+    console.error('Error sending potential match notification:', error);
     return false;
   }
 }
 
 /**
- * Notify a user that their transaction has been matched
+ * Notify a user about a match request that needs confirmation
+ */
+async function notifyUserOfMatchRequest(toUserId, fromUserId, toTransactionId, fromTransactionId, matchDetails) {
+  try {
+    if (!botInstance) {
+      console.error('Bot instance not set for notifications');
+      return;
+    }
+    
+    // Get user details
+    const fromUser = await userService.getUserProfile(fromUserId);
+    if (!fromUser.success) return;
+    
+    // Get transaction details
+    const toTransaction = await transactionService.getTransactionById(toTransactionId);
+    if (!toTransaction) return;
+    
+    const message = `🔄 Transfer Match Request!
+
+${fromUser.profile.name} wants to match with your transfer:
+
+Your Transfer: #${toTransactionId}
+Amount: ${formatCurrency(toTransaction.amount, toTransaction.currency)} ↔ ${formatCurrency(toTransaction.targetAmount, toTransaction.targetCurrency)}
+
+To accept this match, reply with "yes" or "accept".
+To decline, reply with "no" or "reject".`;
+    
+    await botInstance.telegram.sendMessage(toUserId, message);
+    return true;
+  } catch (error) {
+    console.error('Error sending match request notification:', error);
+    return false;
+  }
+}
+
+/**
+ * Notify a user that their match request was rejected
+ */
+async function notifyUserOfMatchRejection(toUserId, fromUserId, toTransactionId) {
+  try {
+    if (!botInstance) {
+      console.error('Bot instance not set for notifications');
+      return;
+    }
+    
+    // Get user details
+    const fromUser = await userService.getUserProfile(fromUserId);
+    if (!fromUser.success) return;
+    
+    const message = `❌ Match Request Declined
+
+${fromUser.profile.name} has declined your match request for transaction #${toTransactionId}.
+
+You can try matching with other users by using /transfer.`;
+    
+    await botInstance.telegram.sendMessage(toUserId, message);
+    return true;
+  } catch (error) {
+    console.error('Error sending match rejection notification:', error);
+    return false;
+  }
+}
+
+/**
+ * Notify a user that their transaction has been matched (confirmed by both parties)
  */
 async function notifyUserOfMatchConfirmation(toUserId, fromUserId, toTransactionId, fromTransactionId) {
   try {
@@ -412,12 +986,37 @@ Your Transfer: #${toTransactionId}
 Status: Matched
 ${formatCurrency(toTransaction.amount, toTransaction.currency)} ↔ ${formatCurrency(toTransaction.targetAmount, toTransaction.targetCurrency)}
 
-You can now communicate with your transfer partner to arrange payment. Once payment is sent, upload proof by sending a photo.`;
+You can now communicate with your transfer partner to arrange payment. Use /message to start a conversation.`;
     
     await botInstance.telegram.sendMessage(toUserId, message);
     return true;
   } catch (error) {
     console.error('Error sending match confirmation:', error);
+    return false;
+  }
+}
+
+/**
+ * Notify a user about a new message
+ */
+async function notifyUserOfNewMessage(toUserId, fromUserId, fromUserName, transactionId, messageText) {
+  try {
+    if (!botInstance) {
+      console.error('Bot instance not set for notifications');
+      return;
+    }
+    
+    const message = `📩 New Message from ${fromUserName}:
+
+"${messageText}"
+
+This is regarding transaction #${transactionId}.
+Use /message to reply.`;
+    
+    await botInstance.telegram.sendMessage(toUserId, message);
+    return true;
+  } catch (error) {
+    console.error('Error sending new message notification:', error);
     return false;
   }
 }
@@ -556,7 +1155,22 @@ async function handleStart(ctx) {
     // Check if user exists in our database
     const userExistsResult = await userService.checkUserExists(userId);
     ctx.state.userExists = userExistsResult.exists;
-    ctx.state.summaryShown = false; // Reset summary shown flag
+    
+    // Reset all state flags
+    ctx.state.summaryShown = false;
+    ctx.state.inTransferCreation = false;
+    ctx.state.awaitingMatchSelection = false;
+    ctx.state.awaitingTransferAmount = false;
+    ctx.state.awaitingDestinationCurrency = false;
+    ctx.state.awaitingMatchConfirmation = false;
+    ctx.state.inMessagingMode = false;
+    ctx.state.availableMatches = null;
+    ctx.state.activeTransactionId = null;
+    ctx.state.transferAmount = null;
+    ctx.state.transferCurrency = null;
+    ctx.state.transactionToConfirm = null;
+    ctx.state.partnerUserId = null;
+    ctx.state.partnerTransactionId = null;
     
     let welcomeMessage;
     
@@ -639,6 +1253,12 @@ async function handleTransfer(ctx) {
       await ctx.reply("You need to be registered to create a transfer. Please register first by telling me your details.");
       return;
     }
+
+    // Set summary shown flag to true to prevent welcome message repetition
+    ctx.state.summaryShown = true;
+    
+    // Reset messaging mode
+    ctx.state.inMessagingMode = false;
     
     // Check if user already has an active transaction
     const activeTransaction = await transactionService.getActiveTransaction(userId);
@@ -657,6 +1277,7 @@ async function handleTransfer(ctx) {
           
           matches.matches.forEach((match, index) => {
             matchesMessage += `${index + 1}. From: ${match.partnerName} (${match.relationship})\n`;
+            matchesMessage += `   Trust Score: ${match.partnerTrustScore} (${match.partnerCompletedTransactions} completed transactions)\n`;
             matchesMessage += `   Amount: ${formatCurrency(match.amount, match.currency)} ↔ ${formatCurrency(match.targetAmount, match.targetCurrency)}\n`;
             matchesMessage += `   Rate: ${match.rate}\n\n`;
           });
@@ -673,6 +1294,11 @@ async function handleTransfer(ctx) {
             role: "assistant",
             content: matchesMessage
           });
+          
+          // Set state for match selection
+          ctx.state.awaitingMatchSelection = true;
+          ctx.state.activeTransactionId = activeTransaction.transaction.transactionId;
+          ctx.state.availableMatches = matches.matches;
           
           await ctx.reply(matchesMessage);
           return;
@@ -696,6 +1322,48 @@ async function handleTransfer(ctx) {
           await ctx.reply(editMessage + details + options);
           return;
         }
+      } else if (activeTransaction.transaction.status === 'pending_match') {
+        if (activeTransaction.transaction.pendingConfirmation) {
+          // This user needs to confirm a match
+          const message = `You have a pending match request for transaction #${activeTransaction.transaction.transactionId}.
+
+Please respond with "yes" to accept or "no" to decline.`;
+          
+          conversations[userId].push({ 
+            role: "user", 
+            content: "/transfer" 
+          });
+          
+          conversations[userId].push({
+            role: "assistant",
+            content: message
+          });
+          
+          // Set state to await confirmation
+          ctx.state.awaitingMatchConfirmation = true;
+          ctx.state.transactionToConfirm = activeTransaction.transaction.transactionId;
+          
+          await ctx.reply(message);
+          return;
+        } else {
+          // This user has initiated a match and is waiting for confirmation
+          const message = `You have a pending match request for transaction #${activeTransaction.transaction.transactionId}.
+
+Waiting for the other party to confirm. I'll notify you when they respond.`;
+          
+          conversations[userId].push({ 
+            role: "user", 
+            content: "/transfer" 
+          });
+          
+          conversations[userId].push({
+            role: "assistant",
+            content: message
+          });
+          
+          await ctx.reply(message);
+          return;
+        }
       } else {
         await ctx.reply(`You already have an active transaction (#${activeTransaction.transaction.transactionId}) in status "${activeTransaction.transaction.status}". Please complete or cancel it before creating a new one.`);
         return;
@@ -712,6 +1380,10 @@ async function handleTransfer(ctx) {
       content: message
     });
     
+    // Set state for transfer creation
+    ctx.state.awaitingTransferAmount = true;
+    ctx.state.inTransferCreation = true;
+    
     await ctx.reply(message);
   } catch (error) {
     console.error('Error handling transfer command:', error);
@@ -726,6 +1398,12 @@ async function handleProfile(ctx) {
   try {
     const userId = ctx.state.userId;
     const conversations = ctx.state.conversations;
+    
+    // Set summary shown flag to true to prevent welcome message repetition
+    ctx.state.summaryShown = true;
+    
+    // Reset messaging mode
+    ctx.state.inMessagingMode = false;
     
     // Check if user exists
     const userExists = await userService.checkUserExists(userId);
@@ -768,12 +1446,89 @@ Your referral code: ${profile.profile.referralCode}`;
 }
 
 /**
+ * Handle /message command
+ */
+async function handleMessage(ctx) {
+  try {
+    const userId = ctx.state.userId;
+    const conversations = ctx.state.conversations;
+    
+    // Set summary shown flag to true to prevent welcome message repetition
+    ctx.state.summaryShown = true;
+    
+    // Check if user exists
+    const userExists = await userService.checkUserExists(userId);
+    
+    if (!userExists.exists) {
+      await ctx.reply("You need to be registered to send messages. Please register first by telling me your details.");
+      return;
+    }
+    
+    // Check if user has an active matched transaction
+    const activeTransaction = await transactionService.getActiveTransaction(userId);
+    
+    if (!activeTransaction.exists || 
+        (activeTransaction.transaction.status !== 'matched' && 
+         activeTransaction.transaction.status !== 'proof_uploaded')) {
+      await ctx.reply("You need to have an active matched transaction to send messages.");
+      return;
+    }
+    
+    // Get partner details
+    const partnerName = activeTransaction.transaction.partner ? 
+      activeTransaction.transaction.partner.name : 'your partner';
+    
+    // Add message to conversation
+    conversations[userId].push({ role: "user", content: "/message" });
+    
+    // Get any existing messages
+    const messagesResult = await transactionService.getMessages(
+      userId,
+      activeTransaction.transaction.transactionId
+    );
+    
+    let messageHistory = '';
+    if (messagesResult.success && messagesResult.messages && messagesResult.messages.length > 0) {
+      messageHistory = "\nPrevious messages:\n\n";
+      messagesResult.messages.forEach(msg => {
+        const fromName = msg.fromUserId === userId ? "You" : msg.fromUserName;
+        messageHistory += `${fromName}: ${msg.message}\n`;
+      });
+      messageHistory += "\n";
+    }
+    
+    const message = `You're now in messaging mode with ${partnerName}.${messageHistory}
+Type your message and I'll deliver it to ${partnerName}.
+(Type /exit to leave messaging mode)`;
+    
+    conversations[userId].push({
+      role: "assistant",
+      content: message
+    });
+    
+    // Set messaging mode state
+    ctx.state.inMessagingMode = true;
+    
+    await ctx.reply(message);
+  } catch (error) {
+    console.error('Error handling message command:', error);
+    await ctx.reply('An error occurred. Please try again later.');
+  }
+}
+
+/**
  * Handle /report command
  */
 async function handleReport(ctx) {
   try {
     const userId = ctx.state.userId;
     const conversations = ctx.state.conversations;
+    
+    // Set summary shown flag to true to prevent welcome message repetition
+    ctx.state.summaryShown = true;
+    
+    // Reset messaging mode
+    ctx.state.inMessagingMode = false;
     
     // Check if user exists
     const userExists = await userService.checkUserExists(userId);
@@ -823,6 +1578,7 @@ module.exports = {
   handleStart,
   handleTransfer,
   handleProfile,
+  handleMessage,
   handleReport,
   setBotInstance
 };
