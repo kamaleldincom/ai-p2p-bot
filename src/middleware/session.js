@@ -1,6 +1,6 @@
 /**
  * src/middleware/session.js
- * Middleware for handling user sessions
+ * Middleware for handling user sessions with improved user verification
  */
 const userService = require('../services/user');
 const { getSystemPrompt } = require('../ai/prompt');
@@ -10,6 +10,7 @@ const conversations = {};
 
 /**
  * Middleware that ensures user identification and conversation tracking
+ * with enhanced first-user detection
  */
 async function sessionMiddleware(ctx, next) {
     try {
@@ -31,23 +32,21 @@ async function sessionMiddleware(ctx, next) {
       
       console.log(`User ID type: ${typeof userId}, value: ${userId}`);
       
+      // Check if user exists in our database
+      const userExists = await userService.checkUserExists(userId);
+      console.log(`User ${userId} exists in database:`, userExists.exists);
+      
+      // Add user status to conversation context
+      ctx.state.userExists = userExists.exists;
+      
       // Initialize conversation if it doesn't exist
       if (!conversations[userId]) {
         console.log(`Initializing new conversation for user: ${userId}`);
         conversations[userId] = [
           { role: "system", content: getSystemPrompt() }
         ];
-        
-        // Check if user exists in our database
-        const userExists = await userService.checkUserExists(userId);
-        console.log(`User ${userId} exists in database:`, userExists.exists);
-        
-        // Add user status to conversation context
-        ctx.state.userExists = userExists.exists;
       } else {
         console.log(`Using existing conversation for user: ${userId}`);
-        // User has ongoing conversation
-        ctx.state.userExists = true;
       }
       
       // Make conversations accessible in the context

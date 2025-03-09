@@ -1,6 +1,6 @@
 /**
  * src/ai/functions.js
- * Define AI function schema definitions
+ * Define AI function schema definitions (with updateTransferRequest added)
  */
 const functionDefinitions = [
   {
@@ -143,16 +143,58 @@ const functionDefinitions = [
           description: "Currency code of the destination",
           enum: ["AED", "SDG", "EGP"]
         },
-        rate: {
-          type: "number",
-          description: "Exchange rate between the currencies"
-        },
         notes: {
           type: "string",
           description: "Optional notes about the transfer"
         }
       },
-      required: ["userId", "amount", "currency", "targetCurrency", "rate"]
+      required: ["userId", "amount", "currency", "targetCurrency"]
+    }
+  },
+  {
+    name: "updateTransferRequest",
+    description: "Update an existing transfer request",
+    parameters: {
+      type: "object",
+      properties: {
+        userId: {
+          type: "string",
+          description: "Telegram user ID of the initiator"
+        },
+        transactionId: {
+          type: "string",
+          description: "ID of the transaction to update"
+        },
+        updates: {
+          type: "object",
+          description: "Fields to update",
+          properties: {
+            amount: {
+              type: "number",
+              description: "New amount to transfer"
+            },
+            currency: {
+              type: "string",
+              description: "New currency code of the amount",
+              enum: ["AED", "SDG", "EGP"]
+            },
+            targetCurrency: {
+              type: "string",
+              description: "New currency code of the destination",
+              enum: ["AED", "SDG", "EGP"]
+            },
+            rate: {
+              type: "number",
+              description: "New exchange rate between the currencies"
+            },
+            notes: {
+              type: "string",
+              description: "New notes about the transfer"
+            }
+          }
+        }
+      },
+      required: ["userId", "transactionId", "updates"]
     }
   },
   {

@@ -1,6 +1,6 @@
 /**
  * src/bot/index.js
- * Main bot initialization file with session middleware
+ * Main bot initialization file with enhanced features
  */
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
@@ -11,7 +11,8 @@ const {
   handleStart, 
   handleTransfer, 
   handleProfile, 
-  handleReport 
+  handleReport,
+  setBotInstance 
 } = require('./handlers');
 const { sessionMiddleware } = require('../middleware/session');
 
@@ -28,6 +29,9 @@ mongoose.connect(process.env.MONGODB_URI)
       name: err.name
     });
   });
+
+// Set the bot instance for notifications
+setBotInstance(bot);
 
 // Error handling
 bot.catch((err, ctx) => {

@@ -1,6 +1,6 @@
 /**
  * src/services/transaction.js
- * Transaction-related service functions
+ * Enhanced transaction-related service functions
  */
 const Transaction = require('../models/transaction');
 const User = require('../models/user');
@@ -35,6 +35,7 @@ async function getActiveTransaction(userId) {
       const partnerUser = await User.findOne({ userId: partnerUserId });
       if (partnerUser) {
         partner = {
+          userId: partnerUser.userId,
           name: partnerUser.name,
           trustScore: partnerUser.trustScore,
           completedTransactions: partnerUser.completedTransactions
@@ -74,6 +75,35 @@ async function getActiveTransaction(userId) {
   } catch (error) {
     console.error('Error getting active transaction:', error);
     return { error: error.message };
+  }
+}
+
+/**
+ * Get transaction by ID
+ */
+async function getTransactionById(transactionId) {
+  try {
+    const transaction = await Transaction.findOne({ transactionId });
+    
+    if (!transaction) {
+      return null;
+    }
+    
+    return {
+      transactionId: transaction.transactionId,
+      amount: transaction.initiator.amount,
+      currency: transaction.initiator.currency,
+      targetAmount: transaction.recipient.amount,
+      targetCurrency: transaction.recipient.currency,
+      initiatorId: transaction.initiator.userId,
+      recipientId: transaction.recipient.userId,
+      status: transaction.status,
+      rate: transaction.rate,
+      notes: transaction.notes
+    };
+  } catch (error) {
+    console.error('Error getting transaction by ID:', error);
+    return null;
   }
 }
 
@@ -172,6 +202,83 @@ async function createTransferRequest(data) {
     };
   } catch (error) {
     console.error('Error creating transfer request:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Update an existing transfer request
+ */
+async function updateTransferRequest(userId, transactionId, updates) {
+  try {
+    // Get the transaction
+    const transaction = await Transaction.findOne({ 
+      transactionId,
+      'initiator.userId': userId.toString(),
+      status: 'open' // Only open transactions can be updated
+    });
+
+    if (!transaction) {
+      return { 
+        success: false, 
+        message: "Transaction not found, or you are not authorized to update it, or it's not in 'open' status" 
+      };
+    }
+
+    // Apply updates
+    let updated = false;
+    
+    if (updates.amount && updates.amount > 0) {
+      transaction.initiator.amount = updates.amount;
+      updated = true;
+    }
+    
+    if (updates.currency) {
+      transaction.initiator.currency = updates.currency;
+      updated = true;
+    }
+    
+    if (updates.targetCurrency) {
+      transaction.recipient.currency = updates.targetCurrency;
+      updated = true;
+    }
+    
+    if (updates.rate && updates.rate > 0) {
+      transaction.rate = updates.rate;
+      updated = true;
+    }
+    
+    if (updates.notes !== undefined) {
+      transaction.notes = updates.notes;
+      updated = true;
+    }
+    
+    // Recalculate target amount if amount or rate changed
+    if ((updates.amount || updates.rate) && transaction.rate > 0 && transaction.initiator.amount > 0) {
+      transaction.recipient.amount = transaction.initiator.amount * transaction.rate;
+      updated = true;
+    }
+
+    if (!updated) {
+      return { success: false, message: "No valid updates provided" };
+    }
+
+    await transaction.save();
+
+    return {
+      success: true,
+      transaction: {
+        transactionId: transaction.transactionId,
+        amount: transaction.initiator.amount,
+        currency: transaction.initiator.currency,
+        targetAmount: transaction.recipient.amount,
+        targetCurrency: transaction.recipient.currency,
+        rate: transaction.rate,
+        notes: transaction.notes
+      }
+    };
+  } catch (error) {
+    console.error('Error updating transfer request:', error);
     return { success: false, error: error.message };
   }
 }
@@ -528,7 +635,9 @@ async function reportIssue(userId, transactionId, reason, details) {
 
 module.exports = {
   getActiveTransaction,
+  getTransactionById,
   createTransferRequest,
+  updateTransferRequest,
   findMatchingTransfers,
   matchTransaction,
   uploadProofOfPayment,
