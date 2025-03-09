@@ -1,6 +1,6 @@
 /**
  * src/bot/index.js
- * Main bot initialization file
+ * Main bot initialization file with session middleware
  */
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
@@ -13,19 +13,19 @@ const {
   handleProfile, 
   handleReport 
 } = require('./handlers');
+const { sessionMiddleware } = require('../middleware/session');
 
 // Initialize bot
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// Connect to MongoDB
+// Connect to MongoDB with better error handling
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => {
     console.error('MongoDB connection error details:', {
       message: err.message,
       code: err.code,
-      name: err.name,
-      stack: err.stack
+      name: err.name
     });
   });
 
@@ -34,6 +34,9 @@ bot.catch((err, ctx) => {
   console.error(`Error for ${ctx.updateType}:`, err);
   ctx.reply('An error occurred. Please try again later.');
 });
+
+// Apply session middleware to all updates
+bot.use(sessionMiddleware);
 
 // Command handlers
 bot.start(handleStart);

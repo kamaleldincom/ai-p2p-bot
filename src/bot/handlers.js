@@ -1,6 +1,6 @@
 /**
  * src/bot/handlers.js
- * Message handlers for the bot
+ * Message handlers for the bot (updated with session handling)
  */
 const { OpenAI } = require('openai');
 const { getSystemPrompt } = require('../ai/prompt');
@@ -13,31 +13,39 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// Store conversation history
-const conversations = {};
-
-// Store active registration sessions
-const registrationSessions = {};
-
 /**
  * Handle incoming text messages
  */
 async function handleMessage(ctx) {
   try {
-    const userId = ctx.from.id.toString();
+    const userId = ctx.state.userId;
     const message = ctx.message.text;
+    const conversations = ctx.state.conversations;
     
     console.log(`Message from ${userId}: ${message}`);
     
-    // Initialize conversation if it doesn't exist
-    if (!conversations[userId]) {
-      conversations[userId] = [
-        { role: "system", content: getSystemPrompt() }
-      ];
-    }
-    
     // Add user message to conversation
     conversations[userId].push({ role: "user", content: message });
+    
+    // If this is the first interaction after starting the bot
+    // and the user doesn't exist in our database, we can
+    // provide a special welcome message
+    if (conversations[userId].length === 2 && !ctx.state.userExists) {
+      const welcomeMessage = `Welcome to the P2P Transfer Bot! 👋
+
+I'm here to help you with secure peer-to-peer currency exchanges within your trusted network.
+
+📌 Key features:
+• Exchange currency with people you trust
+• Send money across supported countries (UAE, Sudan, Egypt)
+• Build a trust score with successful transactions
+
+To get started, you'll need to register. If you're the first user of the system, just tell me and I'll set you up. Otherwise, please provide a valid referral code from someone who's already using the service.`;
+
+      conversations[userId].push({ role: "assistant", content: welcomeMessage });
+      await ctx.reply(welcomeMessage);
+      return;
+    }
     
     // Get AI response
     const response = await openai.chat.completions.create({
@@ -56,69 +64,70 @@ async function handleMessage(ctx) {
       
       console.log(`Function call: ${functionName}`, functionArgs);
       
+      // Always use the authenticated user's ID for security
+      functionArgs.userId = userId;
+      
       // Execute function
       let functionResult;
       switch (functionName) {
         case "checkUserExists":
-    functionResult = await userService.checkUserExists(functionArgs.userId);
-    break;
-  case "validateReferralCode":
-    functionResult = await userService.validateReferralCode(functionArgs.referralCode);
-    break;
-  case "registerUser":
-    // Add the Telegram username
-    functionArgs.telegramUsername = ctx.from.username || '';
-    functionResult = await userService.registerUser(functionArgs);
-    break;
-  case "registerFirstUser":
-    // Add the Telegram username
-    functionArgs.telegramUsername = ctx.from.username || '';
-    functionResult = await userService.registerFirstUser(functionArgs);
-    break;
+          functionResult = await userService.checkUserExists(userId);
+          break;
+        case "validateReferralCode":
+          functionResult = await userService.validateReferralCode(functionArgs.referralCode);
+          break;
+        case "registerUser":
+          // Add the Telegram username
+          functionArgs.telegramUsername = ctx.from.username || '';
+          functionResult = await userService.registerUser(functionArgs);
+          break;
+        case "registerFirstUser":
+          // Add the Telegram username
+          functionArgs.telegramUsername = ctx.from.username || '';
+          functionResult = await userService.registerFirstUser(functionArgs);
+          break;
         case "getUserProfile":
-          functionResult = await userService.getUserProfile(functionArgs.userId);
+          functionResult = await userService.getUserProfile(userId);
           break;
         case "getNetworkConnections":
-          functionResult = await userService.getNetworkConnections(functionArgs.userId);
+          functionResult = await userService.getNetworkConnections(userId);
           break;
         case "createTransferRequest":
           functionResult = await transactionService.createTransferRequest(functionArgs);
           break;
         case "getActiveTransaction":
-          functionResult = await transactionService.getActiveTransaction(functionArgs.userId);
+          functionResult = await transactionService.getActiveTransaction(userId);
           break;
         case "findMatchingTransfers":
           functionResult = await transactionService.findMatchingTransfers(
-            functionArgs.userId, 
+            userId, 
             functionArgs.transactionId
           );
           break;
         case "matchTransaction":
           functionResult = await transactionService.matchTransaction(
-            functionArgs.userId, 
+            userId, 
             functionArgs.transactionId, 
             functionArgs.partnerTransactionId
           );
           break;
         case "uploadProofOfPayment":
-          // For demonstration - in a real implementation, you would use the file ID
-          // from a previously uploaded photo
           functionResult = await transactionService.uploadProofOfPayment(
-            functionArgs.userId, 
+            userId, 
             functionArgs.transactionId, 
             functionArgs.imageId
           );
           break;
         case "completeTransaction":
           functionResult = await transactionService.completeTransaction(
-            functionArgs.userId, 
+            userId, 
             functionArgs.transactionId, 
             functionArgs.confirmed
           );
           break;
         case "reportIssue":
           functionResult = await transactionService.reportIssue(
-            functionArgs.userId, 
+            userId, 
             functionArgs.transactionId, 
             functionArgs.reason, 
             functionArgs.details
@@ -126,6 +135,13 @@ async function handleMessage(ctx) {
           break;
         default:
           functionResult = { error: "Function not implemented" };
+      }
+      
+      // After registration, update the user status in context
+      if (functionName === "registerUser" || functionName === "registerFirstUser") {
+        if (functionResult.success) {
+          ctx.state.userExists = true;
+        }
       }
       
       // Add function result to conversation
@@ -170,9 +186,10 @@ async function handleMessage(ctx) {
  */
 async function handlePhoto(ctx) {
   try {
-    const userId = ctx.from.id.toString();
+    const userId = ctx.state.userId;
     const photoFileId = ctx.message.photo[ctx.message.photo.length - 1].file_id; // Get the highest resolution
     const caption = ctx.message.caption || '';
+    const conversations = ctx.state.conversations;
     
     console.log(`Photo from ${userId}, file ID: ${photoFileId}, caption: ${caption}`);
     
@@ -185,12 +202,6 @@ async function handlePhoto(ctx) {
     }
     
     // Add the photo message to conversation history
-    if (!conversations[userId]) {
-      conversations[userId] = [
-        { role: "system", content: getSystemPrompt() }
-      ];
-    }
-    
     conversations[userId].push({ 
       role: "user", 
       content: `I'm uploading a photo as proof of payment${caption ? ': ' + caption : ''}.` 
@@ -232,25 +243,28 @@ async function handlePhoto(ctx) {
  */
 async function handleStart(ctx) {
   try {
-    const userId = ctx.from.id.toString();
+    const userId = ctx.state.userId;
     const userName = ctx.from.first_name;
-    
-    // Check if user exists
-    const userExists = await userService.checkUserExists(userId);
+    const conversations = ctx.state.conversations;
+    const userExists = ctx.state.userExists;
     
     let welcomeMessage;
-    if (userExists.exists) {
+    if (userExists) {
       welcomeMessage = `Welcome back, ${userName}! How can I help you today? You can create a new transfer with /transfer, check your profile with /profile, or just chat with me for help.`;
     } else {
       welcomeMessage = `Welcome to the P2P Transfer Bot, ${userName}! 👋
 
-To get started, you'll need to complete a quick registration process. Please enter a valid referral code to continue:`;
-      
-      // Start registration session
-      registrationSessions[userId] = { step: 'referral_code' };
+I'm here to help you with secure peer-to-peer currency exchanges within your trusted network.
+
+📌 Key features:
+• Exchange currency with people you trust
+• Send money across supported countries (UAE, Sudan, Egypt)
+• Build a trust score with successful transactions
+
+To get started, you'll need to register. If you're the first user of the system, just tell me and I'll set you up. Otherwise, please provide a valid referral code from someone who's already using the service.`;
     }
     
-    // Initialize or reset conversation
+    // Reset conversation
     conversations[userId] = [
       { role: "system", content: getSystemPrompt() },
       { role: "assistant", content: welcomeMessage }
@@ -268,13 +282,14 @@ To get started, you'll need to complete a quick registration process. Please ent
  */
 async function handleTransfer(ctx) {
   try {
-    const userId = ctx.from.id.toString();
+    const userId = ctx.state.userId;
+    const conversations = ctx.state.conversations;
     
     // Check if user exists
     const userExists = await userService.checkUserExists(userId);
     
     if (!userExists.exists) {
-      await ctx.reply("You need to be registered to create a transfer. Please use /start to register first.");
+      await ctx.reply("You need to be registered to create a transfer. Please register first by telling me your details.");
       return;
     }
     
@@ -287,12 +302,6 @@ async function handleTransfer(ctx) {
     }
     
     // Add message to conversation
-    if (!conversations[userId]) {
-      conversations[userId] = [
-        { role: "system", content: getSystemPrompt() }
-      ];
-    }
-    
     conversations[userId].push({ role: "user", content: "/transfer" });
     
     const message = "Let's create a new transfer! How much would you like to transfer? Please enter the amount and currency (e.g., 1000 AED).";
@@ -314,13 +323,14 @@ async function handleTransfer(ctx) {
  */
 async function handleProfile(ctx) {
   try {
-    const userId = ctx.from.id.toString();
+    const userId = ctx.state.userId;
+    const conversations = ctx.state.conversations;
     
     // Check if user exists
     const userExists = await userService.checkUserExists(userId);
     
     if (!userExists.exists) {
-      await ctx.reply("You need to be registered to view your profile. Please use /start to register first.");
+      await ctx.reply("You need to be registered to view your profile. Please register first by telling me your details.");
       return;
     }
     
@@ -346,12 +356,6 @@ async function handleProfile(ctx) {
 Your referral code: ${profile.profile.referralCode}`;
     
     // Add to conversation
-    if (!conversations[userId]) {
-      conversations[userId] = [
-        { role: "system", content: getSystemPrompt() }
-      ];
-    }
-    
     conversations[userId].push({ role: "user", content: "/profile" });
     conversations[userId].push({ role: "assistant", content: profileMessage });
     
@@ -367,13 +371,14 @@ Your referral code: ${profile.profile.referralCode}`;
  */
 async function handleReport(ctx) {
   try {
-    const userId = ctx.from.id.toString();
+    const userId = ctx.state.userId;
+    const conversations = ctx.state.conversations;
     
     // Check if user exists
     const userExists = await userService.checkUserExists(userId);
     
     if (!userExists.exists) {
-      await ctx.reply("You need to be registered to report an issue. Please use /start to register first.");
+      await ctx.reply("You need to be registered to report an issue. Please register first by telling me your details.");
       return;
     }
     
@@ -386,12 +391,6 @@ async function handleReport(ctx) {
     }
     
     // Add message to conversation
-    if (!conversations[userId]) {
-      conversations[userId] = [
-        { role: "system", content: getSystemPrompt() }
-      ];
-    }
-    
     conversations[userId].push({ role: "user", content: "/report" });
     
     const message = `Report issue with current transfer:

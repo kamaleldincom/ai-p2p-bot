@@ -23,20 +23,30 @@ async function checkUserExists(userId) {
  */
 async function registerFirstUser(userData) {
   try {
+    console.log('=== REGISTRATION ATTEMPT ===');
+    console.log('Registering first user with data:', userData);
+    
     // Check if any users exist in the system
     const userCount = await User.countDocuments();
+    console.log(`Total users in system: ${userCount}`);
+    
     if (userCount > 0) {
+      console.log('System already has users, aborting first user registration');
       return { success: false, message: "System already has users. Please use a valid referral code." };
     }
 
     // Check if user already exists
     const existingUser = await User.findOne({ userId: userData.userId.toString() });
+    console.log(`User exists check for ID ${userData.userId}: ${!!existingUser}`);
+    
     if (existingUser) {
+      console.log('User already registered, aborting registration');
       return { success: false, message: "User already registered" };
     }
 
     // Generate a unique referral code for the new user
     const userReferralCode = await generateUniqueReferralCode();
+    console.log(`Generated referral code: ${userReferralCode}`);
 
     // Create new user (as first user, they are self-referred)
     const newUser = new User({
@@ -54,7 +64,32 @@ async function registerFirstUser(userData) {
       status: 'active'
     });
 
-    await newUser.save();
+    console.log('Attempting to save user to database...');
+    try {
+      await newUser.save();
+      console.log('User successfully saved to database');
+      
+      // Verify saved user
+      const savedUser = await User.findOne({ userId: userData.userId.toString() });
+      console.log('Verified user in database:', savedUser ? 'Found' : 'Not found');
+      if (savedUser) {
+        console.log('Saved user details:', {
+          id: savedUser._id,
+          userId: savedUser.userId,
+          name: savedUser.name,
+          referralCode: savedUser.referralCode
+        });
+      }
+    } catch (saveError) {
+      console.error('Error saving user to database:', saveError);
+      // Check for validation errors
+      if (saveError.name === 'ValidationError') {
+        for (const field in saveError.errors) {
+          console.error(`Validation error for ${field}:`, saveError.errors[field].message);
+        }
+      }
+      throw saveError;
+    }
 
     return {
       success: true,
@@ -167,10 +202,35 @@ async function generateUniqueReferralCode() {
  */
 async function getUserProfile(userId) {
   try {
+    console.log('=== PROFILE RETRIEVAL ATTEMPT ===');
+    console.log(`Getting profile for user ID: ${userId}`);
+    
+    // List all users in the database for debugging
+    const allUsers = await User.find({});
+    console.log(`Total users in database: ${allUsers.length}`);
+    if (allUsers.length > 0) {
+      console.log('User IDs in database:', allUsers.map(user => ({
+        userId: user.userId,
+        name: user.name
+      })));
+    }
+    
     const user = await User.findOne({ userId: userId.toString() });
+    console.log(`User found in database: ${!!user}`);
+    
     if (!user) {
+      console.log(`No user found with ID: ${userId}`);
       return { success: false, message: "User not found" };
     }
+
+    console.log('User details:', {
+      id: user._id,
+      userId: user.userId,
+      name: user.name,
+      referralCode: user.referralCode,
+      referredBy: user.referredBy,
+      trustScore: user.trustScore
+    });
 
     // Get network stats
     const referrer = await User.findOne({ userId: user.referredBy });
@@ -178,6 +238,13 @@ async function getUserProfile(userId) {
     const siblings = await User.countDocuments({ 
       referredBy: user.referredBy,
       userId: { $ne: userId.toString() }
+    });
+    
+    console.log('Network stats:', {
+      referrer: referrer ? 'Found' : 'None',
+      referrerName: referrer?.name,
+      referrals: referrals,
+      siblings: siblings
     });
 
     return {
