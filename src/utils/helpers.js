@@ -28,7 +28,9 @@ function generateTransactionId() {
  * Format currency with proper formatting
  */
 function formatCurrency(amount, currency) {
-  if (amount === undefined || currency === undefined) {
+  if (amount === undefined || amount === null || 
+      currency === undefined || currency === null || 
+      isNaN(amount)) {
     return 'N/A';
   }
   
@@ -55,20 +57,73 @@ function getCurrencySymbol(currency) {
 }
 
 /**
+ * List of supported currencies
+ */
+const SUPPORTED_CURRENCIES = ['AED', 'SDG', 'EGP'];
+
+/**
  * Parse amount from text
  * e.g. "1000 AED" -> { amount: 1000, currency: "AED" }
+ * 
+ * This version is more robust and supports various formats
+ * and validates that the currency is one of the supported ones
  */
 function parseAmountAndCurrency(text) {
-  const regex = /(\d+(?:\.\d+)?)\s*([A-Z]{3})/i;
-  const match = text.match(regex);
-  
-  if (match) {
-    return {
-      amount: parseFloat(match[1]),
-      currency: match[2].toUpperCase()
-    };
+  if (!text) {
+    console.log('Empty text provided to parseAmountAndCurrency');
+    return null;
   }
   
+  console.log(`Parsing amount from: "${text}"`);
+  
+  // Different regex patterns to try
+  const patterns = [
+    // Standard format: 1000 AED
+    /(\d+(?:\.\d+)?)\s*([A-Z]{3})/i,
+    
+    // Format with comma: 1,000 AED
+    /([\d,]+(?:\.\d+)?)\s*([A-Z]{3})/i,
+    
+    // Just the number, assuming we can get currency from context
+    /^(\d+(?:\.\d+)?)$/
+  ];
+  
+  for (const regex of patterns) {
+    const match = text.match(regex);
+    if (match) {
+      // Clean the amount string - remove commas
+      const amountStr = match[1].replace(/,/g, '');
+      const amount = parseFloat(amountStr);
+      
+      if (isNaN(amount) || amount <= 0) {
+        console.log(`Invalid amount: ${amountStr}`);
+        continue;
+      }
+      
+      // Use the matched currency or default to a common one
+      let currency = match[2] ? match[2].toUpperCase() : 'AED';
+      
+      // Check if currency is supported
+      if (!SUPPORTED_CURRENCIES.includes(currency)) {
+        console.log(`Unsupported currency: ${currency}`);
+        if (match[2]) {
+          // If there was an explicit currency that's not supported, return null
+          return null;
+        }
+        // Default to AED for patterns without currency
+        currency = 'AED';
+      }
+      
+      console.log(`Successfully parsed: amount=${amount}, currency=${currency}`);
+      
+      return {
+        amount: amount,
+        currency: currency
+      };
+    }
+  }
+  
+  console.log('Failed to parse amount');
   return null;
 }
 

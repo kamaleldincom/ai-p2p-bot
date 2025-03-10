@@ -2,6 +2,7 @@
  * src/services/transaction.js
  * Enhanced transaction-related service functions with two-way confirmation
  */
+const mongoose = require('mongoose');
 const Transaction = require('../models/transaction');
 const User = require('../models/user');
 const { generateTransactionId } = require('../utils/helpers');
@@ -163,10 +164,38 @@ async function checkNetworkRelationship(userId1, userId2) {
  */
 async function createTransferRequest(data) {
   try {
+    // List of supported currencies
+    const SUPPORTED_CURRENCIES = ['AED', 'SDG', 'EGP'];
+    
     // Check if user exists
     const user = await User.findOne({ userId: data.userId.toString() });
     if (!user) {
       return { success: false, message: "User not found" };
+    }
+
+    // Validate amount
+    if (!data.amount || isNaN(data.amount) || data.amount <= 0) {
+      return { success: false, message: "Invalid amount. Please provide a positive number." };
+    }
+
+    // Validate currencies
+    if (!SUPPORTED_CURRENCIES.includes(data.currency)) {
+      return { 
+        success: false, 
+        message: `Invalid currency: ${data.currency}. Supported currencies are: ${SUPPORTED_CURRENCIES.join(', ')}.` 
+      };
+    }
+
+    if (!SUPPORTED_CURRENCIES.includes(data.targetCurrency)) {
+      return { 
+        success: false, 
+        message: `Invalid target currency: ${data.targetCurrency}. Supported currencies are: ${SUPPORTED_CURRENCIES.join(', ')}.` 
+      };
+    }
+
+    // Check if source and target currencies are the same
+    if (data.currency === data.targetCurrency) {
+      return { success: false, message: "Source and target currencies cannot be the same." };
     }
 
     // Check if user already has an active transaction
@@ -180,6 +209,11 @@ async function createTransferRequest(data) {
 
     if (hasActiveTransaction) {
       return { success: false, message: "You already have an active transaction" };
+    }
+
+    // Validate rate
+    if (!data.rate || isNaN(data.rate) || data.rate <= 0) {
+      return { success: false, message: "Invalid exchange rate. Please provide a positive number." };
     }
 
     // Create a new transaction
@@ -509,25 +543,70 @@ async function confirmMatchRequest(userId, transactionId, accept) {
       return { success: true, accepted: false };
     }
     
-    // Accept the match - update both transactions
+    // Accept the match - update both transactions using atomic operations
     const partnerTransactionId = partnerTransaction.transactionId;
-    
-    // Update partner's transaction
-    partnerTransaction.status = 'matched';
-    partnerTransaction.timestamps.matched = new Date();
-    
-    // Update user's transaction
-    userTransaction.recipient.userId = partnerTransaction.initiator.userId;
-    userTransaction.status = 'matched';
-    userTransaction.relationship = partnerTransaction.relationship === 'referrer' 
+    const currentTime = new Date();
+    const relationship = partnerTransaction.relationship === 'referrer' 
       ? 'referee' 
       : (partnerTransaction.relationship === 'referee' ? 'referrer' : 'sibling');
-    userTransaction.timestamps.matched = new Date();
     
-    await Promise.all([
-      partnerTransaction.save(),
-      userTransaction.save()
-    ]);
+    try {
+      // Use a session to ensure both updates happen or neither happens
+      const session = await mongoose.startSession();
+      
+      await session.withTransaction(async () => {
+        // Update partner's transaction atomically
+        const updatedPartnerTx = await Transaction.findOneAndUpdate(
+          { 
+            transactionId: partnerTransactionId,
+            status: 'pending_match' // Ensure it's still in the expected state
+          },
+          { 
+            $set: {
+              status: 'matched',
+              'timestamps.matched': currentTime
+            }
+          },
+          { 
+            new: true,
+            session
+          }
+        );
+        
+        if (!updatedPartnerTx) {
+          throw new Error("Partner transaction no longer available for matching");
+        }
+        
+        // Update user's transaction atomically
+        const updatedUserTx = await Transaction.findOneAndUpdate(
+          { 
+            transactionId: userTransaction.transactionId,
+            status: 'open'  // Ensure it's still in the expected state
+          },
+          { 
+            $set: {
+              'recipient.userId': partnerTransaction.initiator.userId,
+              status: 'matched',
+              relationship: relationship,
+              'timestamps.matched': currentTime
+            }
+          },
+          { 
+            new: true,
+            session
+          }
+        );
+        
+        if (!updatedUserTx) {
+          throw new Error("Your transaction is no longer available for matching");
+        }
+      });
+      
+      await session.endSession();
+    } catch (error) {
+      console.error('Transaction error in confirmMatchRequest:', error);
+      return { success: false, message: error.message };
+    }
     
     // Get partner details
     const partner = await User.findOne({ userId: partnerTransaction.initiator.userId });
@@ -672,30 +751,72 @@ async function uploadProofOfPayment(userId, transactionId, imageId) {
       return { success: false, message: "You have already uploaded proof of payment" };
     }
 
-    // Add proof
-    transaction.proofs.push({
-      userId: userId.toString(),
-      imageId: imageId,
-      uploadedAt: new Date()
-    });
-
-    // Update status if needed
-    if (transaction.proofs.length === 1) {
-      transaction.status = 'proof_uploaded';
-    } else if (transaction.proofs.length === 2) {
-      transaction.status = 'completed';
-      transaction.timestamps.completed = new Date();
-
-      // Update user trust scores
-      await updateTrustScores(transaction);
+    // Instead of modifying and saving the document, use findOneAndUpdate
+    // with an atomic update operation to prevent race conditions
+    const updatedTransaction = await Transaction.findOneAndUpdate(
+      { 
+        transactionId,
+        $or: [
+          { 'initiator.userId': userId.toString() },
+          { 'recipient.userId': userId.toString() }
+        ]
+      },
+      { 
+        $push: { 
+          proofs: {
+            userId: userId.toString(),
+            imageId: imageId,
+            uploadedAt: new Date()
+          } 
+        }
+      },
+      { new: true } // Return the updated document
+    );
+    
+    if (!updatedTransaction) {
+      return { success: false, message: "Transaction not found or you are not part of it" };
     }
-
-    await transaction.save();
+    
+    // Count proofs after the update
+    const proofCount = updatedTransaction.proofs.length;
+    
+    // Determine the new status based on proof count
+    let newStatus = updatedTransaction.status;
+    let completed = false;
+    
+    if (proofCount === 1) {
+      newStatus = 'proof_uploaded';
+    } else if (proofCount >= 2) {
+      newStatus = 'completed';
+      completed = true;
+    }
+    
+    // If status needs to change, update it in a separate operation
+    if (newStatus !== updatedTransaction.status) {
+      const update = { 
+        status: newStatus 
+      };
+      
+      // Add completion timestamp if needed
+      if (completed) {
+        update['timestamps.completed'] = new Date();
+      }
+      
+      await Transaction.updateOne(
+        { transactionId },
+        update
+      );
+      
+      // Update trust scores if completed
+      if (completed) {
+        await updateTrustScores(updatedTransaction);
+      }
+    }
 
     return {
       success: true,
-      status: transaction.status,
-      proofs: transaction.proofs.length
+      status: newStatus,
+      proofs: proofCount
     };
   } catch (error) {
     console.error('Error uploading proof of payment:', error);
@@ -707,26 +828,42 @@ async function uploadProofOfPayment(userId, transactionId, imageId) {
  * Update trust scores after transaction completion
  */
 async function updateTrustScores(transaction) {
-  // Increase trust score for both parties
-  await User.updateOne(
-    { userId: transaction.initiator.userId },
-    { 
-      $inc: { 
-        trustScore: 5,
-        completedTransactions: 1
-      } 
-    }
-  );
-
-  await User.updateOne(
-    { userId: transaction.recipient.userId },
-    { 
-      $inc: { 
-        trustScore: 5,
-        completedTransactions: 1
-      } 
-    }
-  );
+  try {
+    // Use Promise.all to perform both updates concurrently
+    // $inc operator is atomic, preventing race conditions
+    const results = await Promise.all([
+      User.findOneAndUpdate(
+        { userId: transaction.initiator.userId },
+        { 
+          $inc: { 
+            trustScore: 5,
+            completedTransactions: 1
+          } 
+        },
+        { new: true } // Return the updated document
+      ),
+      
+      User.findOneAndUpdate(
+        { userId: transaction.recipient.userId },
+        { 
+          $inc: { 
+            trustScore: 5,
+            completedTransactions: 1
+          } 
+        },
+        { new: true } // Return the updated document
+      )
+    ]);
+    
+    // Log the results
+    console.log(`Trust scores updated: Initiator=${results[0]?.trustScore}, Recipient=${results[1]?.trustScore}`);
+    return true;
+  } catch (error) {
+    console.error('Error updating trust scores:', error);
+    // Don't throw - we don't want to break transaction completion
+    // but we should log the error
+    return false;
+  }
 }
 
 /**
@@ -827,6 +964,39 @@ async function reportIssue(userId, transactionId, reason, details) {
   }
 }
 
+/**
+ * Mark a message as read
+ */
+async function markMessageAsRead(transactionId, timestamp) {
+  try {
+    // Find the transaction
+    const transaction = await Transaction.findOne({ transactionId });
+    
+    if (!transaction || !transaction.messages) {
+      console.log(`No transaction or messages found for ID: ${transactionId}`);
+      return false;
+    }
+    
+    // Find and update the message
+    const result = await Transaction.updateOne(
+      { 
+        transactionId, 
+        "messages.timestamp": new Date(timestamp) 
+      },
+      { 
+        $set: { 
+          "messages.$.read": true 
+        } 
+      }
+    );
+    
+    return result.modifiedCount > 0;
+  } catch (error) {
+    console.error('Error marking message as read:', error);
+    return false;
+  }
+}
+
 module.exports = {
   getActiveTransaction,
   getTransactionById,
@@ -837,6 +1007,7 @@ module.exports = {
   confirmMatchRequest,
   sendMessage,
   getMessages,
+  markMessageAsRead,
   uploadProofOfPayment,
   completeTransaction,
   reportIssue,

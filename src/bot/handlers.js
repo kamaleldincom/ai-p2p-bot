@@ -8,6 +8,7 @@ const { functionDefinitions } = require('../ai/functions');
 const userService = require('../services/user');
 const transactionService = require('../services/transaction');
 const { formatCurrency, parseAmountAndCurrency } = require('../utils/helpers');
+const { logSessionState, resetMessagingState, debugTransactionState } = require('../utils/debug');
 
 // Bot instance reference for sending notifications to users
 let botInstance = null;
@@ -34,13 +35,66 @@ async function handleMessage(ctx) {
     console.log(`Message from ${userId}: ${message}`);
     console.log(`User exists: ${ctx.state.userExists}, Summary shown: ${ctx.state.summaryShown}`);
     
+    // Log session state for debugging
+    logSessionState(ctx);
+    
     // Check if this is a command (starts with /)
     const isCommand = message.startsWith('/');
     
+    // If this is a command, reset messaging mode
+    if (isCommand) {
+      resetMessagingState(ctx);
+    }
+    
     // Check if user is in messaging mode and this is not a command
     if (ctx.state.inMessagingMode && !isCommand) {
-      await handlePartnerMessage(ctx, message);
-      return;
+      // Check if the message is to exit messaging mode
+      if (message.toLowerCase() === '/exit') {
+        ctx.state.inMessagingMode = false;
+        await ctx.reply("You've exited messaging mode.");
+        return;
+      }
+      
+      try {
+        // Double-check that user actually has a matched transaction before proceeding
+        const activeTransaction = await transactionService.getActiveTransaction(userId);
+        
+        if (!activeTransaction.exists) {
+          // Reset the messaging mode as it's invalid
+          ctx.state.inMessagingMode = false;
+          await ctx.reply("You don't have an active transaction. Messaging mode has been disabled.");
+          
+          // Debug the transaction state
+          await debugTransactionState(userId);
+          
+          // Provide a summary of available actions
+          await provideTradeSummary(ctx);
+          return;
+        }
+        
+        if (activeTransaction.transaction.status !== 'matched' && 
+           activeTransaction.transaction.status !== 'proof_uploaded') {
+          // Reset the messaging mode as transaction isn't in the right state
+          ctx.state.inMessagingMode = false;
+          await ctx.reply(`Your transaction is in '${activeTransaction.transaction.status}' status. It needs to be 'matched' or 'proof_uploaded' to send messages. Messaging mode has been disabled.`);
+          
+          // Debug the transaction state
+          await debugTransactionState(userId);
+          
+          // Provide a summary of available actions
+          await provideTradeSummary(ctx);
+          return;
+        }
+        
+        // If we get here, messaging mode is valid, proceed with partner message
+        await handlePartnerMessage(ctx, message);
+        return;
+      } catch (error) {
+        console.error('Error checking transaction status for messaging:', error);
+        // Don't disable messaging mode on temporary errors
+        await ctx.reply("Unable to verify your transaction status. Please try again or use /exit to leave messaging mode.");
+        return;
+      }
     }
     
     if (!isCommand) {
@@ -109,13 +163,45 @@ To get started, you'll need to register. If you're the first user of the system,
       return;
     }
     
-    // Get AI response
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: conversations[userId],
-      functions: functionDefinitions,
-      function_call: "auto"
-    });
+    // Get AI response with retry and better error handling
+    let response;
+    let retries = 2;
+    
+    while (retries >= 0) {
+      try {
+        response = await openai.chat.completions.create({
+          model: "gpt-3.5-turbo",
+          messages: conversations[userId],
+          functions: functionDefinitions,
+          function_call: "auto"
+        });
+        break;
+      } catch (error) {
+        if (error.status === 429 && retries > 0) {
+          // Rate limit error, wait and retry
+          console.log(`OpenAI rate limit hit, retrying in 2 seconds (${retries} retries left)`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          retries--;
+        } else if (error.status === 400 && error.message?.includes('tokens')) {
+          // Token limit exceeded
+          console.log('Token limit exceeded, trimming conversation history');
+          // Keep system message and last few messages
+          const systemMessage = conversations[userId].find(msg => msg.role === "system");
+          conversations[userId] = [
+            systemMessage || { role: "system", content: getSystemPrompt() },
+            { role: "user", content: message }
+          ];
+          retries--;
+        } else {
+          // Re-throw for other errors
+          throw error;
+        }
+      }
+    }
+    
+    if (!response) {
+      throw new Error('Failed to get response from OpenAI after retries');
+    }
     
     const responseMessage = response.choices[0].message;
     
@@ -324,11 +410,44 @@ To get started, you'll need to register. If you're the first user of the system,
         content: JSON.stringify(functionResult)
       });
       
-      // Get new response
-      const newResponse = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: conversations[userId]
-      });
+      // Get new response with retry and better error handling
+      let newResponse;
+      let newRetries = 2;
+      
+      while (newRetries >= 0) {
+        try {
+          newResponse = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: conversations[userId]
+          });
+          break;
+        } catch (error) {
+          if (error.status === 429 && newRetries > 0) {
+            // Rate limit error, wait and retry
+            console.log(`OpenAI rate limit hit, retrying in 2 seconds (${newRetries} retries left)`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            newRetries--;
+          } else if (error.status === 400 && error.message?.includes('tokens')) {
+            // Token limit exceeded
+            console.log('Token limit exceeded, trimming conversation history');
+            // Keep system message, function result and truncate earlier messages
+            const systemMessage = conversations[userId].find(msg => msg.role === "system");
+            const functionResultMessage = conversations[userId][conversations[userId].length - 1];
+            conversations[userId] = [
+              systemMessage || { role: "system", content: getSystemPrompt() },
+              functionResultMessage
+            ];
+            newRetries--;
+          } else {
+            // Re-throw for other errors
+            throw error;
+          }
+        }
+      }
+      
+      if (!newResponse) {
+        throw new Error('Failed to get response from OpenAI after retries');
+      }
       
       const newResponseContent = newResponse.choices[0].message.content;
       
@@ -588,12 +707,16 @@ async function handleMatchConfirmation(ctx, accept) {
       
       await ctx.reply(message);
       
-      // Notify the other user
-      await notifyUserOfMatchRejection(
-        ctx.state.partnerUserId,
-        userId,
-        ctx.state.partnerTransactionId
-      );
+      // Notify the other user if we have partner details
+      if (ctx.state.partnerUserId && ctx.state.partnerTransactionId) {
+        await notifyUserOfMatchRejection(
+          ctx.state.partnerUserId,
+          userId,
+          ctx.state.partnerTransactionId
+        );
+      } else {
+        console.error('Unable to notify partner: missing partnerUserId or partnerTransactionId');
+      }
       
       return;
     }
@@ -771,6 +894,8 @@ async function provideTradeSummary(ctx) {
     // Get user profile
     const profile = await userService.getUserProfile(userId);
     if (!profile.success) {
+      console.error('Error retrieving user profile:', profile.message || profile.error);
+      await ctx.reply('Unable to retrieve your profile information. Please try again later.');
       return;
     }
     
@@ -805,6 +930,8 @@ async function provideTradeSummary(ctx) {
         
         if (unreadMessages > 0) {
           welcomeMessage += `📩 You have ${unreadMessages} unread message(s). Use /messages to view them.\n\n`;
+        } else if (activeTransaction.transaction.messages && activeTransaction.transaction.messages.length > 0) {
+          welcomeMessage += `💬 You have ${activeTransaction.transaction.messages.length} message(s) in this transaction. Use /messages to view them.\n\n`;
         }
       }
     } else {
@@ -1152,6 +1279,9 @@ async function handleStart(ctx) {
     const userName = ctx.from.first_name;
     const conversations = ctx.state.conversations;
     
+    // Log session state for debugging
+    logSessionState(ctx);
+    
     // Check if user exists in our database
     const userExistsResult = await userService.checkUserExists(userId);
     ctx.state.userExists = userExistsResult.exists;
@@ -1163,7 +1293,7 @@ async function handleStart(ctx) {
     ctx.state.awaitingTransferAmount = false;
     ctx.state.awaitingDestinationCurrency = false;
     ctx.state.awaitingMatchConfirmation = false;
-    ctx.state.inMessagingMode = false;
+    resetMessagingState(ctx);
     ctx.state.availableMatches = null;
     ctx.state.activeTransactionId = null;
     ctx.state.transferAmount = null;
@@ -1246,6 +1376,12 @@ async function handleTransfer(ctx) {
     const userId = ctx.state.userId;
     const conversations = ctx.state.conversations;
     
+    // Log session state for debugging
+    logSessionState(ctx);
+    
+    // Reset all messaging-related state flags
+    resetMessagingState(ctx);
+    
     // Check if user exists
     const userExists = await userService.checkUserExists(userId);
     
@@ -1257,11 +1393,11 @@ async function handleTransfer(ctx) {
     // Set summary shown flag to true to prevent welcome message repetition
     ctx.state.summaryShown = true;
     
-    // Reset messaging mode
-    ctx.state.inMessagingMode = false;
-    
     // Check if user already has an active transaction
     const activeTransaction = await transactionService.getActiveTransaction(userId);
+    
+    // Debug the transaction state
+    await debugTransactionState(userId);
     
     if (activeTransaction.exists) {
       // If transaction is open, check for matches
@@ -1399,11 +1535,14 @@ async function handleProfile(ctx) {
     const userId = ctx.state.userId;
     const conversations = ctx.state.conversations;
     
-    // Set summary shown flag to true to prevent welcome message repetition
-    ctx.state.summaryShown = true;
+    // Log session state for debugging
+    logSessionState(ctx);
     
     // Reset messaging mode
-    ctx.state.inMessagingMode = false;
+    resetMessagingState(ctx);
+    
+    // Set summary shown flag to true to prevent welcome message repetition
+    ctx.state.summaryShown = true;
     
     // Check if user exists
     const userExists = await userService.checkUserExists(userId);
@@ -1448,13 +1587,21 @@ Your referral code: ${profile.profile.referralCode}`;
 /**
  * Handle /message command
  */
-async function handleMessage(ctx) {
+async function handleMessageCommand(ctx) {
   try {
     const userId = ctx.state.userId;
     const conversations = ctx.state.conversations;
     
+    // Log session state for debugging
+    logSessionState(ctx);
+    
     // Set summary shown flag to true to prevent welcome message repetition
     ctx.state.summaryShown = true;
+    
+    // Reset transfer creation flags
+    ctx.state.inTransferCreation = false;
+    ctx.state.awaitingTransferAmount = false;
+    ctx.state.awaitingDestinationCurrency = false;
     
     // Check if user exists
     const userExists = await userService.checkUserExists(userId);
@@ -1467,10 +1614,17 @@ async function handleMessage(ctx) {
     // Check if user has an active matched transaction
     const activeTransaction = await transactionService.getActiveTransaction(userId);
     
-    if (!activeTransaction.exists || 
-        (activeTransaction.transaction.status !== 'matched' && 
-         activeTransaction.transaction.status !== 'proof_uploaded')) {
-      await ctx.reply("You need to have an active matched transaction to send messages.");
+    // Debug the transaction
+    await debugTransactionState(userId);
+    
+    if (!activeTransaction.exists) {
+      await ctx.reply("You don't have any active transaction. Please create a transfer first with /transfer.");
+      return;
+    }
+    
+    if (activeTransaction.transaction.status !== 'matched' && 
+        activeTransaction.transaction.status !== 'proof_uploaded') {
+      await ctx.reply(`Your transaction is in '${activeTransaction.transaction.status}' status. It needs to be 'matched' before you can send messages.`);
       return;
     }
     
@@ -1509,6 +1663,9 @@ Type your message and I'll deliver it to ${partnerName}.
     // Set messaging mode state
     ctx.state.inMessagingMode = true;
     
+    // Save the transaction ID for reference
+    ctx.state.activeTransactionId = activeTransaction.transaction.transactionId;
+    
     await ctx.reply(message);
   } catch (error) {
     console.error('Error handling message command:', error);
@@ -1524,11 +1681,14 @@ async function handleReport(ctx) {
     const userId = ctx.state.userId;
     const conversations = ctx.state.conversations;
     
+    // Log session state for debugging
+    logSessionState(ctx);
+    
     // Set summary shown flag to true to prevent welcome message repetition
     ctx.state.summaryShown = true;
     
     // Reset messaging mode
-    ctx.state.inMessagingMode = false;
+    resetMessagingState(ctx);
     
     // Check if user exists
     const userExists = await userService.checkUserExists(userId);
@@ -1572,13 +1732,101 @@ Please type your reason from the list above.`;
   }
 }
 
+/**
+ * Handle /messages command to view unread messages
+ */
+async function handleMessages(ctx) {
+  try {
+    const userId = ctx.state.userId;
+    const conversations = ctx.state.conversations;
+    
+    // Log session state for debugging
+    logSessionState(ctx);
+    
+    // Set summary shown flag to true to prevent welcome message repetition
+    ctx.state.summaryShown = true;
+    
+    // Reset messaging mode
+    resetMessagingState(ctx);
+    
+    // Check if user exists
+    const userExists = await userService.checkUserExists(userId);
+    
+    if (!userExists.exists) {
+      await ctx.reply("You need to be registered to view messages. Please register first by telling me your details.");
+      return;
+    }
+    
+    // Check if user has an active transaction
+    const activeTransaction = await transactionService.getActiveTransaction(userId);
+    
+    if (!activeTransaction.exists) {
+      await ctx.reply("You don't have any active transaction to view messages for.");
+      return;
+    }
+    
+    // Get transaction messages
+    const messagesResult = await transactionService.getMessages(
+      userId,
+      activeTransaction.transaction.transactionId
+    );
+    
+    if (!messagesResult.success) {
+      await ctx.reply(`Failed to retrieve messages: ${messagesResult.message || messagesResult.error}`);
+      return;
+    }
+    
+    // Add message to conversation
+    conversations[userId].push({ role: "user", content: "/messages" });
+    
+    // Format messages and send to user
+    if (!messagesResult.messages || messagesResult.messages.length === 0) {
+      const noMessagesResponse = "You don't have any messages for your current transaction.";
+      conversations[userId].push({ role: "assistant", content: noMessagesResponse });
+      await ctx.reply(noMessagesResponse);
+      return;
+    }
+    
+    // Format messages
+    let formattedMessages = `Messages for transaction #${activeTransaction.transaction.transactionId}:\n\n`;
+    
+    const partnerName = activeTransaction.transaction.partner ? 
+      activeTransaction.transaction.partner.name : 'your partner';
+    
+    messagesResult.messages.forEach((msg, index) => {
+      const fromName = msg.fromUserId === userId ? "You" : msg.fromUserName || partnerName;
+      const timestamp = new Date(msg.timestamp).toLocaleString();
+      formattedMessages += `${fromName} (${timestamp}):\n${msg.message}\n\n`;
+      
+      // Mark message as read if it was sent to this user
+      if (msg.toUserId === userId && !msg.read) {
+        transactionService.markMessageAsRead(
+          activeTransaction.transaction.transactionId, 
+          msg.timestamp
+        ).catch(err => console.error('Error marking message as read:', err));
+      }
+    });
+    
+    formattedMessages += `\nUse /message to send a new message to ${partnerName}.`;
+    
+    // Add to conversation
+    conversations[userId].push({ role: "assistant", content: formattedMessages });
+    
+    await ctx.reply(formattedMessages);
+  } catch (error) {
+    console.error('Error handling messages command:', error);
+    await ctx.reply('An error occurred. Please try again later.');
+  }
+}
+
 module.exports = {
   handleMessage,
   handlePhoto,
   handleStart,
   handleTransfer,
   handleProfile,
-  handleMessage,
+  handleMessageCommand,
+  handleMessages,
   handleReport,
   setBotInstance
 };

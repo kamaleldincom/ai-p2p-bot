@@ -11,10 +11,13 @@ const {
   handleStart, 
   handleTransfer, 
   handleProfile, 
+  handleMessageCommand,
+  handleMessages,
   handleReport,
   setBotInstance 
 } = require('./handlers');
 const { sessionMiddleware } = require('../middleware/session');
+const { logSessionState } = require('../utils/debug');
 
 // Initialize bot
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
@@ -42,11 +45,28 @@ bot.catch((err, ctx) => {
 // Apply session middleware to all updates
 bot.use(sessionMiddleware);
 
-// Command handlers
+// Add debug middleware to log all commands
+bot.use((ctx, next) => {
+  if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/')) {
+    console.log(`Command received: ${ctx.message.text}`);
+    logSessionState(ctx);
+  }
+  return next();
+});
+
+// Command handlers - we need to be explicit about message command
 bot.start(handleStart);
 bot.command('transfer', handleTransfer);
 bot.command('profile', handleProfile);
+bot.command('message', handleMessageCommand); 
+bot.command('messages', handleMessages); // Add the messages command
 bot.command('report', handleReport);
+
+// Special case for /exit command to leave messaging mode
+bot.command('exit', async (ctx) => {
+  ctx.state.inMessagingMode = false;
+  await ctx.reply("You've exited messaging mode.");
+});
 
 // Message handlers
 bot.on('text', handleMessage);
