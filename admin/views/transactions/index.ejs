@@ -1,0 +1,160 @@
+<!-- Transactions list page -->
+
+<div class="row mb-4">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <h5 class="mb-0">Transaction Filters</h5>
+      </div>
+      <div class="card-body">
+        <form action="/transactions" method="GET" class="row g-3">
+          <div class="col-md-3">
+            <label for="status" class="form-label">Status</label>
+            <select class="form-select" id="status" name="status">
+              <option value="">All Statuses</option>
+              <option value="open" <%= filters.status === 'open' ? 'selected' : '' %>>Open</option>
+              <option value="pending_match" <%= filters.status === 'pending_match' ? 'selected' : '' %>>Pending Match</option>
+              <option value="matched" <%= filters.status === 'matched' ? 'selected' : '' %>>Matched</option>
+              <option value="proof_uploaded" <%= filters.status === 'proof_uploaded' ? 'selected' : '' %>>Proof Uploaded</option>
+              <option value="completed" <%= filters.status === 'completed' ? 'selected' : '' %>>Completed</option>
+              <option value="cancelled" <%= filters.status === 'cancelled' ? 'selected' : '' %>>Cancelled</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label for="userId" class="form-label">User ID</label>
+            <input type="text" class="form-control" id="userId" name="userId" value="<%= filters.userId || '' %>" placeholder="Filter by user ID">
+          </div>
+          <div class="col-md-3">
+            <label for="transactionId" class="form-label">Transaction ID</label>
+            <input type="text" class="form-control" id="transactionId" name="transactionId" value="<%= filters.transactionId || '' %>" placeholder="Search by TX ID">
+          </div>
+          <div class="col-md-3 d-flex align-items-end">
+            <button type="submit" class="btn btn-primary w-100">
+              <i class="bi bi-search"></i> Apply Filters
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">Transactions</h5>
+    <div>
+      <span class="text-muted me-2">
+        Total: <%= pagination.total %> transactions
+      </span>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-striped">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Initiator</th>
+            <th>From</th>
+            <th>Recipient</th>
+            <th>To</th>
+            <th>Rate</th>
+            <th>Status</th>
+            <th>Date</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (transactions.length === 0) { %>
+            <tr>
+              <td colspan="9" class="text-center py-3">No transactions found</td>
+            </tr>
+          <% } else { %>
+            <% transactions.forEach(tx => { %>
+              <tr>
+                <td><%= tx.id %></td>
+                <td>
+                  <a href="/users?userId=<%= tx.initiator.id %>">
+                    <%= tx.initiator.name %>
+                  </a>
+                </td>
+                <td>
+                  <%= tx.initiator.amount %> <%= tx.initiator.currency %>
+                </td>
+                <td>
+                  <% if (tx.recipient.id) { %>
+                    <a href="/users?userId=<%= tx.recipient.id %>">
+                      <%= tx.recipient.name %>
+                    </a>
+                  <% } else { %>
+                    <span class="text-muted">Pending</span>
+                  <% } %>
+                </td>
+                <td>
+                  <%= tx.recipient.amount %> <%= tx.recipient.currency %>
+                </td>
+                <td><%= tx.rate %></td>
+                <td>
+                  <% if (tx.status === 'completed') { %>
+                    <span class="badge bg-success">Completed</span>
+                  <% } else if (tx.status === 'matched' || tx.status === 'proof_uploaded') { %>
+                    <span class="badge bg-primary">In Progress</span>
+                  <% } else if (tx.status === 'open' || tx.status === 'pending_match') { %>
+                    <span class="badge bg-warning text-dark">Pending</span>
+                  <% } else if (tx.status === 'cancelled') { %>
+                    <span class="badge bg-danger">Cancelled</span>
+                  <% } else { %>
+                    <span class="badge bg-secondary"><%= tx.status %></span>
+                  <% } %>
+                </td>
+                <td><%= tx.createdAt %></td>
+                <td>
+                  <a href="/transactions/<%= tx.id %>" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-eye"></i> View
+                  </a>
+                </td>
+              </tr>
+            <% }); %>
+          <% } %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card-footer">
+    <nav>
+      <ul class="pagination justify-content-center mb-0">
+        <% if (pagination.page > 1) { %>
+          <li class="page-item">
+            <a class="page-link" href="/transactions?page=<%= pagination.page - 1 %>&limit=<%= pagination.limit %>&status=<%= filters.status || '' %>&userId=<%= filters.userId || '' %>&transactionId=<%= filters.transactionId || '' %>">
+              Previous
+            </a>
+          </li>
+        <% } else { %>
+          <li class="page-item disabled">
+            <a class="page-link" href="#">Previous</a>
+          </li>
+        <% } %>
+        
+        <% for (let i = 1; i <= pagination.pages; i++) { %>
+          <li class="page-item <%= i === pagination.page ? 'active' : '' %>">
+            <a class="page-link" href="/transactions?page=<%= i %>&limit=<%= pagination.limit %>&status=<%= filters.status || '' %>&userId=<%= filters.userId || '' %>&transactionId=<%= filters.transactionId || '' %>">
+              <%= i %>
+            </a>
+          </li>
+        <% } %>
+        
+        <% if (pagination.page < pagination.pages) { %>
+          <li class="page-item">
+            <a class="page-link" href="/transactions?page=<%= pagination.page + 1 %>&limit=<%= pagination.limit %>&status=<%= filters.status || '' %>&userId=<%= filters.userId || '' %>&transactionId=<%= filters.transactionId || '' %>">
+              Next
+            </a>
+          </li>
+        <% } else { %>
+          <li class="page-item disabled">
+            <a class="page-link" href="#">Next</a>
+          </li>
+        <% } %>
+      </ul>
+    </nav>
+  </div>
+</div>

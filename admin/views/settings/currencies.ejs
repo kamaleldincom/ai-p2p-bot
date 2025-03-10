@@ -1,0 +1,396 @@
+<!-- Currency settings page -->
+
+<div class="mb-3">
+  <a href="/settings" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i> Back to Settings
+  </a>
+</div>
+
+<div class="row">
+  <div class="col-md-6">
+    <!-- Currencies List -->
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Supported Currencies</h5>
+        <% if (user.role === 'superadmin') { %>
+          <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addCurrencyModal">
+            <i class="bi bi-plus-circle"></i> Add Currency
+          </button>
+        <% } %>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table table-striped">
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Name</th>
+                <th>Symbol</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="currenciesTableBody">
+              <% currencies.forEach(currency => { %>
+                <tr data-currency-code="<%= currency.code %>">
+                  <td><%= currency.code %></td>
+                  <td><%= currency.name %></td>
+                  <td><%= currency.symbol %></td>
+                  <td>
+                    <% if (currency.enabled) { %>
+                      <span class="badge bg-success">Enabled</span>
+                    <% } else { %>
+                      <span class="badge bg-secondary">Disabled</span>
+                    <% } %>
+                  </td>
+                  <td>
+                    <% if (user.role === 'superadmin') { %>
+                      <button class="btn btn-sm btn-outline-primary edit-currency-btn" 
+                              data-currency='<%= JSON.stringify(currency) %>'
+                              data-bs-toggle="modal" 
+                              data-bs-target="#editCurrencyModal">
+                        <i class="bi bi-pencil"></i>
+                      </button>
+                      <button class="btn btn-sm btn-outline-danger delete-currency-btn" data-currency-code="<%= currency.code %>">
+                        <i class="bi bi-trash"></i>
+                      </button>
+                    <% } else { %>
+                      <span class="text-muted"><i class="bi bi-lock"></i> Superadmin only</span>
+                    <% } %>
+                  </td>
+                </tr>
+              <% }); %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="col-md-6">
+    <!-- Exchange Rates -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <h5 class="mb-0">Exchange Rates</h5>
+      </div>
+      <div class="card-body">
+        <form id="exchangeRatesForm">
+          <div class="table-responsive">
+            <table class="table table-striped">
+              <thead>
+                <tr>
+                  <th>From</th>
+                  <th>To</th>
+                  <th>Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                <% 
+                let pairs = [];
+                currencies.forEach(from => {
+                  currencies.forEach(to => {
+                    if (from.code !== to.code) {
+                      const key = `${from.code}_${to.code}`;
+                      const rate = exchangeRates[key] || 0;
+                      pairs.push({ from: from.code, to: to.code, rate });
+                    }
+                  });
+                });
+                %>
+                
+                <% pairs.forEach(pair => { %>
+                  <tr>
+                    <td><%= pair.from %></td>
+                    <td><%= pair.to %></td>
+                    <td>
+                      <div class="input-group input-group-sm">
+                        <input type="number" step="0.0001" min="0" 
+                               class="form-control rate-input" 
+                               id="rate_<%= pair.from %>_<%= pair.to %>" 
+                               name="rates[<%= pair.from %>_<%= pair.to %>]" 
+                               value="<%= pair.rate %>">
+                        <span class="input-group-text">1 <%= pair.from %> = X <%= pair.to %></span>
+                      </div>
+                    </td>
+                  </tr>
+                <% }); %>
+              </tbody>
+            </table>
+          </div>
+          
+          <div class="mt-3 text-end">
+            <% if (user.role === 'superadmin') { %>
+              <button type="button" id="saveRatesBtn" class="btn btn-primary">
+                <i class="bi bi-save"></i> Save Exchange Rates
+              </button>
+            <% } else { %>
+              <div class="alert alert-info">
+                <i class="bi bi-info-circle"></i> Only superadmins can modify exchange rates
+              </div>
+            <% } %>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Currency Modal -->
+<div class="modal fade" id="addCurrencyModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Add New Currency</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <form id="addCurrencyForm">
+          <div class="mb-3">
+            <label for="newCurrencyCode" class="form-label">Currency Code</label>
+            <input type="text" class="form-control" id="newCurrencyCode" name="code" required maxlength="3" placeholder="e.g. USD">
+            <div class="form-text">3-letter ISO currency code</div>
+          </div>
+          <div class="mb-3">
+            <label for="newCurrencyName" class="form-label">Currency Name</label>
+            <input type="text" class="form-control" id="newCurrencyName" name="name" required placeholder="e.g. US Dollar">
+          </div>
+          <div class="mb-3">
+            <label for="newCurrencySymbol" class="form-label">Symbol</label>
+            <input type="text" class="form-control" id="newCurrencySymbol" name="symbol" required placeholder="e.g. $">
+          </div>
+          <div class="mb-3 form-check">
+            <input type="checkbox" class="form-check-input" id="newCurrencyEnabled" name="enabled" checked>
+            <label class="form-check-label" for="newCurrencyEnabled">Currency Enabled</label>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" id="addCurrencyBtn" class="btn btn-primary">Add Currency</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Currency Modal -->
+<div class="modal fade" id="editCurrencyModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Edit Currency</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <form id="editCurrencyForm">
+          <input type="hidden" id="editCurrencyCode" name="code">
+          <div class="mb-3">
+            <label for="editCurrencyName" class="form-label">Currency Name</label>
+            <input type="text" class="form-control" id="editCurrencyName" name="name" required>
+          </div>
+          <div class="mb-3">
+            <label for="editCurrencySymbol" class="form-label">Symbol</label>
+            <input type="text" class="form-control" id="editCurrencySymbol" name="symbol" required>
+          </div>
+          <div class="mb-3 form-check">
+            <input type="checkbox" class="form-check-input" id="editCurrencyEnabled" name="enabled">
+            <label class="form-check-label" for="editCurrencyEnabled">Currency Enabled</label>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" id="updateCurrencyBtn" class="btn btn-primary">Update Currency</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    // Handle currency edit button clicks
+    document.querySelectorAll('.edit-currency-btn').forEach(btn => {
+      btn.addEventListener('click', function() {
+        const currencyData = JSON.parse(this.getAttribute('data-currency'));
+        document.getElementById('editCurrencyCode').value = currencyData.code;
+        document.getElementById('editCurrencyName').value = currencyData.name;
+        document.getElementById('editCurrencySymbol').value = currencyData.symbol;
+        document.getElementById('editCurrencyEnabled').checked = currencyData.enabled !== false;
+      });
+    });
+    
+    // Handle add currency form submission
+    document.getElementById('addCurrencyBtn').addEventListener('click', async function() {
+      const form = document.getElementById('addCurrencyForm');
+      const formData = new FormData(form);
+      
+      // Build the currency object
+      const currency = {
+        code: formData.get('code').toUpperCase(),
+        name: formData.get('name'),
+        symbol: formData.get('symbol'),
+        enabled: formData.get('enabled') === 'on'
+      };
+      
+      // Validate
+      if (!currency.code || !currency.name || !currency.symbol) {
+        alert('All fields are required');
+        return;
+      }
+      
+      // Get current currencies
+      const currencies = <%= JSON.stringify(currencies) %>;
+      
+      // Check for duplicate
+      if (currencies.some(c => c.code === currency.code)) {
+        alert(`Currency with code ${currency.code} already exists`);
+        return;
+      }
+      
+      // Add to list
+      currencies.push(currency);
+      
+      // Save currencies
+      try {
+        await saveCurrencySettings(currencies, <%= JSON.stringify(exchangeRates) %>);
+        location.reload();
+      } catch (error) {
+        alert('Error saving currency: ' + error.message);
+      }
+    });
+    
+    // Handle edit currency form submission
+    document.getElementById('updateCurrencyBtn').addEventListener('click', async function() {
+      const form = document.getElementById('editCurrencyForm');
+      const formData = new FormData(form);
+      
+      const code = formData.get('code');
+      
+      // Build the updated currency object
+      const updatedCurrency = {
+        code: code,
+        name: formData.get('name'),
+        symbol: formData.get('symbol'),
+        enabled: formData.get('enabled') === 'on'
+      };
+      
+      // Get current currencies
+      const currencies = <%= JSON.stringify(currencies) %>;
+      
+      // Update the currency
+      const updatedCurrencies = currencies.map(c => 
+        c.code === code ? updatedCurrency : c
+      );
+      
+      // Save currencies
+      try {
+        await saveCurrencySettings(updatedCurrencies, <%= JSON.stringify(exchangeRates) %>);
+        location.reload();
+      } catch (error) {
+        alert('Error updating currency: ' + error.message);
+      }
+    });
+    
+    // Handle delete currency button clicks
+    document.querySelectorAll('.delete-currency-btn').forEach(btn => {
+      btn.addEventListener('click', async function() {
+        const code = this.getAttribute('data-currency-code');
+        
+        if (!confirm(`Are you sure you want to delete the ${code} currency?`)) {
+          return;
+        }
+        
+        // Get current currencies
+        const currencies = <%= JSON.stringify(currencies) %>;
+        
+        // Filter out the deleted currency
+        const updatedCurrencies = currencies.filter(c => c.code !== code);
+        
+        // Get current exchange rates
+        const exchangeRates = <%= JSON.stringify(exchangeRates) %>;
+        
+        // Filter out exchange rates involving the deleted currency
+        const updatedRates = {};
+        Object.keys(exchangeRates).forEach(key => {
+          if (!key.startsWith(code + '_') && !key.endsWith('_' + code)) {
+            updatedRates[key] = exchangeRates[key];
+          }
+        });
+        
+        // Save currencies and rates
+        try {
+          await saveCurrencySettings(updatedCurrencies, updatedRates);
+          location.reload();
+        } catch (error) {
+          alert('Error deleting currency: ' + error.message);
+        }
+      });
+    });
+    
+    // Handle save exchange rates button
+    document.getElementById('saveRatesBtn').addEventListener('click', async function() {
+      const rateInputs = document.querySelectorAll('.rate-input');
+      const rates = {};
+      
+      rateInputs.forEach(input => {
+        const id = input.id;
+        const parts = id.replace('rate_', '').split('_');
+        const key = `${parts[0]}_${parts[1]}`;
+        rates[key] = parseFloat(input.value) || 0;
+      });
+      
+      // Save rates
+      try {
+        await saveCurrencySettings(<%= JSON.stringify(currencies) %>, rates);
+        alert('Exchange rates saved successfully');
+        location.reload();
+      } catch (error) {
+        alert('Error saving exchange rates: ' + error.message);
+      }
+    });
+    
+    // Helper function to save currency settings
+    async function saveCurrencySettings(currencies, exchangeRates) {
+      console.log('Saving currency settings...');
+      console.log('Currencies:', currencies);
+      console.log('Exchange rates:', exchangeRates);
+      
+      try {
+        // Create request body and log it for debugging
+        const requestBody = JSON.stringify({
+          currencies,
+          exchangeRates
+        });
+        console.log('Request body:', requestBody);
+        
+        // Send the request
+        const response = await fetch('/settings/currencies', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: requestBody
+        });
+        
+        // Check if response is OK
+        if (!response.ok) {
+          console.error('Response not OK:', response.status, response.statusText);
+        }
+        
+        // Parse response as JSON
+        const result = await response.json();
+        console.log('Response:', result);
+        
+        if (!result.success) {
+          console.error('Error in response:', result.message);
+          throw new Error(result.message);
+        }
+        
+        console.log('Currency settings saved successfully');
+        return result;
+      } catch (error) {
+        console.error('Error saving currency settings:', error);
+        throw error;
+      }
+    }
+  });
+</script>

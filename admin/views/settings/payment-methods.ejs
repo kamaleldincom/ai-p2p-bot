@@ -1,0 +1,283 @@
+<!-- Payment Methods settings page -->
+
+<div class="mb-3">
+  <a href="/settings" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i> Back to Settings
+  </a>
+</div>
+
+<div class="row">
+  <div class="col-md-8">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Payment Methods</h5>
+        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addMethodModal">
+          <i class="bi bi-plus-circle"></i> Add Payment Method
+        </button>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table table-striped">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="paymentMethodsTableBody">
+              <% paymentMethods.forEach(method => { %>
+                <tr data-method-id="<%= method.id %>">
+                  <td><%= method.id %></td>
+                  <td><%= method.name %></td>
+                  <td>
+                    <% if (method.enabled) { %>
+                      <span class="badge bg-success">Enabled</span>
+                    <% } else { %>
+                      <span class="badge bg-secondary">Disabled</span>
+                    <% } %>
+                  </td>
+                  <td>
+                    <button class="btn btn-sm btn-outline-primary edit-method-btn" 
+                            data-method='<%= JSON.stringify(method) %>'
+                            data-bs-toggle="modal" 
+                            data-bs-target="#editMethodModal">
+                      <i class="bi bi-pencil"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger delete-method-btn" data-method-id="<%= method.id %>">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </td>
+                </tr>
+              <% }); %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="col-md-4">
+    <div class="card">
+      <div class="card-header">
+        <h5 class="mb-0">Guide</h5>
+      </div>
+      <div class="card-body">
+        <h6>About Payment Methods</h6>
+        <p>
+          Payment methods define the ways users can transfer money between each other when completing a transaction.
+        </p>
+        
+        <h6>Recommendations</h6>
+        <ul>
+          <li>Give each payment method a unique ID</li>
+          <li>Use descriptive names that users will understand</li>
+          <li>Disable methods that are temporarily unavailable</li>
+          <li>Keep the list of payment methods concise</li>
+        </ul>
+        
+        <h6>Common Payment Methods</h6>
+        <ul>
+          <li>Bank Transfer</li>
+          <li>Cash Payment</li>
+          <li>Mobile Money</li>
+          <li>Digital Wallets</li>
+          <li>Gift Cards</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Payment Method Modal -->
+<div class="modal fade" id="addMethodModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Add Payment Method</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <form id="addMethodForm">
+          <div class="mb-3">
+            <label for="newMethodId" class="form-label">Method ID</label>
+            <input type="text" class="form-control" id="newMethodId" name="id" required placeholder="e.g. bank_transfer">
+            <div class="form-text">Use snake_case for the ID (lowercase with underscores)</div>
+          </div>
+          <div class="mb-3">
+            <label for="newMethodName" class="form-label">Method Name</label>
+            <input type="text" class="form-control" id="newMethodName" name="name" required placeholder="e.g. Bank Transfer">
+          </div>
+          <div class="mb-3 form-check">
+            <input type="checkbox" class="form-check-input" id="newMethodEnabled" name="enabled" checked>
+            <label class="form-check-label" for="newMethodEnabled">Method Enabled</label>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" id="addMethodBtn" class="btn btn-primary">Add Method</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Payment Method Modal -->
+<div class="modal fade" id="editMethodModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Edit Payment Method</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <form id="editMethodForm">
+          <input type="hidden" id="editMethodId" name="id">
+          <div class="mb-3">
+            <label for="editMethodName" class="form-label">Method Name</label>
+            <input type="text" class="form-control" id="editMethodName" name="name" required>
+          </div>
+          <div class="mb-3 form-check">
+            <input type="checkbox" class="form-check-input" id="editMethodEnabled" name="enabled">
+            <label class="form-check-label" for="editMethodEnabled">Method Enabled</label>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" id="updateMethodBtn" class="btn btn-primary">Update Method</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    // Handle payment method edit button clicks
+    document.querySelectorAll('.edit-method-btn').forEach(btn => {
+      btn.addEventListener('click', function() {
+        const methodData = JSON.parse(this.getAttribute('data-method'));
+        document.getElementById('editMethodId').value = methodData.id;
+        document.getElementById('editMethodName').value = methodData.name;
+        document.getElementById('editMethodEnabled').checked = methodData.enabled !== false;
+      });
+    });
+    
+    // Handle add payment method form submission
+    document.getElementById('addMethodBtn').addEventListener('click', async function() {
+      const form = document.getElementById('addMethodForm');
+      const formData = new FormData(form);
+      
+      // Build the method object
+      const method = {
+        id: formData.get('id'),
+        name: formData.get('name'),
+        enabled: formData.get('enabled') === 'on'
+      };
+      
+      // Validate
+      if (!method.id || !method.name) {
+        alert('ID and Name are required');
+        return;
+      }
+      
+      // Get current payment methods
+      const paymentMethods = <%= JSON.stringify(paymentMethods) %>;
+      
+      // Check for duplicate
+      if (paymentMethods.some(m => m.id === method.id)) {
+        alert(`Payment method with ID ${method.id} already exists`);
+        return;
+      }
+      
+      // Add to list
+      paymentMethods.push(method);
+      
+      // Save payment methods
+      try {
+        await savePaymentMethods(paymentMethods);
+        location.reload();
+      } catch (error) {
+        alert('Error saving payment method: ' + error.message);
+      }
+    });
+    
+    // Handle edit payment method form submission
+    document.getElementById('updateMethodBtn').addEventListener('click', async function() {
+      const form = document.getElementById('editMethodForm');
+      const formData = new FormData(form);
+      
+      const id = formData.get('id');
+      
+      // Build the updated method object
+      const updatedMethod = {
+        id: id,
+        name: formData.get('name'),
+        enabled: formData.get('enabled') === 'on'
+      };
+      
+      // Get current payment methods
+      const paymentMethods = <%= JSON.stringify(paymentMethods) %>;
+      
+      // Update the payment method
+      const updatedMethods = paymentMethods.map(m => 
+        m.id === id ? updatedMethod : m
+      );
+      
+      // Save payment methods
+      try {
+        await savePaymentMethods(updatedMethods);
+        location.reload();
+      } catch (error) {
+        alert('Error updating payment method: ' + error.message);
+      }
+    });
+    
+    // Handle delete payment method button clicks
+    document.querySelectorAll('.delete-method-btn').forEach(btn => {
+      btn.addEventListener('click', async function() {
+        const id = this.getAttribute('data-method-id');
+        
+        if (!confirm(`Are you sure you want to delete the "${id}" payment method?`)) {
+          return;
+        }
+        
+        // Get current payment methods
+        const paymentMethods = <%= JSON.stringify(paymentMethods) %>;
+        
+        // Filter out the deleted method
+        const updatedMethods = paymentMethods.filter(m => m.id !== id);
+        
+        // Save payment methods
+        try {
+          await savePaymentMethods(updatedMethods);
+          location.reload();
+        } catch (error) {
+          alert('Error deleting payment method: ' + error.message);
+        }
+      });
+    });
+    
+    // Helper function to save payment methods
+    async function savePaymentMethods(paymentMethods) {
+      const response = await fetch('/settings/payment-methods', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          paymentMethods
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.message);
+      }
+      
+      return result;
+    }
+  });
+</script>

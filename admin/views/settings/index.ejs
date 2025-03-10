@@ -1,0 +1,93 @@
+<!-- Settings index page -->
+<div class="row">
+  <div class="col-md-12 mb-4">
+    <div class="alert alert-info">
+      <i class="bi bi-info-circle"></i> 
+      Use these settings to configure various aspects of the P2P transfer system.
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <!-- Currency settings card -->
+  <div class="col-md-4 mb-4">
+    <div class="card h-100">
+      <div class="card-header bg-primary text-white">
+        <h5 class="mb-0">
+          <i class="bi bi-cash-coin"></i> Currencies
+        </h5>
+      </div>
+      <div class="card-body">
+        <p>Configure the supported currencies and exchange rates for the P2P transfer system.</p>
+        <p>Currently supporting <%= config.supportedCurrencies.length %> currencies.</p>
+        <ul>
+          <% config.supportedCurrencies.forEach(currency => { %>
+            <li><%= currency.name %> (<%= currency.code %>)</li>
+          <% }); %>
+        </ul>
+      </div>
+      <div class="card-footer">
+        <a href="/settings/currencies" class="btn btn-primary">
+          <i class="bi bi-gear"></i> Manage Currencies
+        </a>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Payment methods card -->
+  <div class="col-md-4 mb-4">
+    <div class="card h-100">
+      <div class="card-header bg-success text-white">
+        <h5 class="mb-0">
+          <i class="bi bi-credit-card"></i> Payment Methods
+        </h5>
+      </div>
+      <div class="card-body">
+        <p>Manage the available payment methods that users can choose for their transactions.</p>
+        <p>Currently supporting <%= config.paymentMethods.length %> payment methods.</p>
+        <ul>
+          <% config.paymentMethods.forEach(method => { %>
+            <li>
+              <%= method.name %>
+              <% if (!method.enabled) { %>
+                <span class="badge bg-secondary">Disabled</span>
+              <% } %>
+            </li>
+          <% }); %>
+        </ul>
+      </div>
+      <div class="card-footer">
+        <a href="/settings/payment-methods" class="btn btn-success">
+          <i class="bi bi-gear"></i> Manage Payment Methods
+        </a>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Admin users card -->
+  <% if (user.role === 'superadmin') { %>
+    <div class="col-md-4 mb-4">
+      <div class="card h-100">
+        <div class="card-header bg-danger text-white">
+          <h5 class="mb-0">
+            <i class="bi bi-shield-lock"></i> Admin Users
+          </h5>
+        </div>
+        <div class="card-body">
+          <p>Manage administrator accounts and permissions for the dashboard.</p>
+          <p>
+            <strong>Note:</strong> Only superadmins can manage other admin users.
+          </p>
+          <p>
+            <strong>Current admin:</strong> <%= user.username %> (<%= user.role %>)
+          </p>
+        </div>
+        <div class="card-footer">
+          <a href="/settings/admins" class="btn btn-danger">
+            <i class="bi bi-gear"></i> Manage Admins
+          </a>
+        </div>
+      </div>
+    </div>
+  <% } %>
+</div>

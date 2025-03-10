@@ -1,0 +1,505 @@
+<!-- Transaction details page -->
+
+<div class="mb-3">
+  <a href="/transactions" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i> Back to Transactions
+  </a>
+</div>
+
+<div class="row">
+  <div class="col-md-8">
+    <!-- Transaction Details Card -->
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Transaction Details</h5>
+        <div>
+          <% if (transaction.status !== 'completed' && transaction.status !== 'cancelled') { %>
+            <button class="btn btn-sm btn-danger ms-2 cancel-tx-btn" data-tx-id="<%= transaction.id %>">
+              <i class="bi bi-x-circle"></i> Cancel Transaction
+            </button>
+          <% } %>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="row mb-4">
+          <div class="col-md-6">
+            <h6 class="text-muted">ID</h6>
+            <p class="mb-0 fs-5"><%= transaction.id %></p>
+          </div>
+          <div class="col-md-6">
+            <h6 class="text-muted">Status</h6>
+            <div>
+              <% if (transaction.status === 'completed') { %>
+                <span class="badge bg-success fs-6">Completed</span>
+              <% } else if (transaction.status === 'matched' || transaction.status === 'proof_uploaded') { %>
+                <span class="badge bg-primary fs-6">In Progress</span>
+              <% } else if (transaction.status === 'open' || transaction.status === 'pending_match') { %>
+                <span class="badge bg-warning text-dark fs-6">Pending</span>
+              <% } else if (transaction.status === 'cancelled') { %>
+                <span class="badge bg-danger fs-6">Cancelled</span>
+              <% } else { %>
+                <span class="badge bg-secondary fs-6"><%= transaction.status %></span>
+              <% } %>
+              
+              <% if (transaction.status !== 'completed' && transaction.status !== 'cancelled') { %>
+                <div class="dropdown d-inline-block ms-2">
+                  <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                    Change Status
+                  </button>
+                  <ul class="dropdown-menu">
+                    <li>
+                      <button class="dropdown-item update-status-btn" data-tx-id="<%= transaction.id %>" data-status="open">
+                        Open
+                      </button>
+                    </li>
+                    <li>
+                      <button class="dropdown-item update-status-btn" data-tx-id="<%= transaction.id %>" data-status="pending_match">
+                        Pending Match
+                      </button>
+                    </li>
+                    <li>
+                      <button class="dropdown-item update-status-btn" data-tx-id="<%= transaction.id %>" data-status="matched">
+                        Matched
+                      </button>
+                    </li>
+                    <li>
+                      <button class="dropdown-item update-status-btn" data-tx-id="<%= transaction.id %>" data-status="proof_uploaded">
+                        Proof Uploaded
+                      </button>
+                    </li>
+                    <li>
+                      <button class="dropdown-item update-status-btn" data-tx-id="<%= transaction.id %>" data-status="completed">
+                        Completed
+                      </button>
+                    </li>
+                    <li>
+                      <button class="dropdown-item update-status-btn" data-tx-id="<%= transaction.id %>" data-status="cancelled">
+                        Cancelled
+                      </button>
+                    </li>
+                  </ul>
+                </div>
+              <% } %>
+            </div>
+          </div>
+        </div>
+        
+        <div class="row mb-4">
+          <div class="col-md-6">
+            <div class="card bg-light">
+              <div class="card-header">
+                <h6 class="mb-0">Initiator</h6>
+              </div>
+              <div class="card-body">
+                <p class="mb-1">
+                  <strong>User:</strong> 
+                  <a href="/users/<%= transaction.initiator.id %>">
+                    <%= transaction.initiator.name %> (<%= transaction.initiator.id %>)
+                  </a>
+                </p>
+                <p class="mb-1">
+                  <strong>Amount:</strong> 
+                  <span class="fs-5"><%= transaction.initiator.amount %> <%= transaction.initiator.currency %></span>
+                </p>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="card bg-light">
+              <div class="card-header">
+                <h6 class="mb-0">Recipient</h6>
+              </div>
+              <div class="card-body">
+                <% if (transaction.recipient.id) { %>
+                  <p class="mb-1">
+                    <strong>User:</strong> 
+                    <a href="/users/<%= transaction.recipient.id %>">
+                      <%= transaction.recipient.name %> (<%= transaction.recipient.id %>)
+                    </a>
+                  </p>
+                <% } else { %>
+                  <p class="mb-1">
+                    <strong>User:</strong> <span class="text-muted">Not matched yet</span>
+                  </p>
+                <% } %>
+                <p class="mb-1">
+                  <strong>Amount:</strong> 
+                  <span class="fs-5"><%= transaction.recipient.amount %> <%= transaction.recipient.currency %></span>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="row">
+          <div class="col-md-3">
+            <h6 class="text-muted">Exchange Rate</h6>
+            <p><%= transaction.rate %></p>
+          </div>
+          <div class="col-md-3">
+            <h6 class="text-muted">Relationship</h6>
+            <p class="text-capitalize"><%= transaction.relationship || 'N/A' %></p>
+          </div>
+          <div class="col-md-3">
+            <h6 class="text-muted">Created</h6>
+            <p><%= transaction.timestamps.created %></p>
+          </div>
+          <div class="col-md-3">
+            <h6 class="text-muted">Completed</h6>
+            <p><%= transaction.timestamps.completed || 'N/A' %></p>
+          </div>
+        </div>
+        
+        <% if (transaction.notes) { %>
+          <div class="mt-3">
+            <h6 class="text-muted">Notes</h6>
+            <p><%= transaction.notes %></p>
+          </div>
+        <% } %>
+        
+        <% if (transaction.pendingPartnerTransactionId) { %>
+          <div class="mt-3">
+            <h6 class="text-muted">Pending Partner Transaction</h6>
+            <p>
+              <a href="/transactions/<%= transaction.pendingPartnerTransactionId %>">
+                <%= transaction.pendingPartnerTransactionId %>
+              </a>
+            </p>
+          </div>
+        <% } %>
+      </div>
+    </div>
+    
+    <!-- Timeline Card -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <h5 class="mb-0">Transaction Timeline</h5>
+      </div>
+      <div class="card-body">
+        <ul class="timeline">
+          <li class="timeline-item">
+            <div class="timeline-marker"></div>
+            <div class="timeline-content">
+              <h6 class="timeline-title">Created</h6>
+              <p class="timeline-date"><%= transaction.timestamps.created %></p>
+              <p>Transaction initiated by <%= transaction.initiator.name %></p>
+            </div>
+          </li>
+          
+          <% if (transaction.timestamps.matchRequested) { %>
+            <li class="timeline-item">
+              <div class="timeline-marker"></div>
+              <div class="timeline-content">
+                <h6 class="timeline-title">Match Requested</h6>
+                <p class="timeline-date"><%= transaction.timestamps.matchRequested %></p>
+                <p>User requested to match with a partner</p>
+              </div>
+            </li>
+          <% } %>
+          
+          <% if (transaction.timestamps.matched) { %>
+            <li class="timeline-item">
+              <div class="timeline-marker"></div>
+              <div class="timeline-content">
+                <h6 class="timeline-title">Matched</h6>
+                <p class="timeline-date"><%= transaction.timestamps.matched %></p>
+                <p>Matched with <%= transaction.recipient.name %></p>
+              </div>
+            </li>
+          <% } %>
+          
+          <% if (transaction.proofs && transaction.proofs.length > 0) { %>
+            <li class="timeline-item">
+              <div class="timeline-marker"></div>
+              <div class="timeline-content">
+                <h6 class="timeline-title">Proof Uploaded</h6>
+                <p class="timeline-date"><%= transaction.proofs[0].uploadedAt %></p>
+                <p>Payment proof was uploaded</p>
+              </div>
+            </li>
+          <% } %>
+          
+          <% if (transaction.timestamps.completed) { %>
+            <li class="timeline-item">
+              <div class="timeline-marker"></div>
+              <div class="timeline-content">
+                <h6 class="timeline-title">Completed</h6>
+                <p class="timeline-date"><%= transaction.timestamps.completed %></p>
+                <p>Transaction successfully completed</p>
+              </div>
+            </li>
+          <% } %>
+        </ul>
+      </div>
+    </div>
+    
+    <!-- Messages Card -->
+    <% if (transaction.messages && transaction.messages.length > 0) { %>
+      <div class="card mb-4">
+        <div class="card-header">
+          <h5 class="mb-0">Messages (<%= transaction.messages.length %>)</h5>
+        </div>
+        <div class="card-body">
+          <div class="message-list">
+            <% transaction.messages.forEach(msg => { %>
+              <div class="message-item d-flex mb-3 <%= msg.from === transaction.initiator.id ? 'justify-content-start' : 'justify-content-end' %>">
+                <div class="message-content <%= msg.from === transaction.initiator.id ? 'initiator-msg' : 'recipient-msg' %>">
+                  <div class="message-header d-flex justify-content-between">
+                    <small class="fw-bold"><%= msg.fromName %></small>
+                    <small class="text-muted"><%= msg.timestamp %></small>
+                  </div>
+                  <p class="mb-0"><%= msg.message %></p>
+                  <% if (!msg.read) { %>
+                    <small class="text-muted">Not read</small>
+                  <% } %>
+                </div>
+              </div>
+            <% }); %>
+          </div>
+        </div>
+      </div>
+    <% } %>
+  </div>
+  
+  <div class="col-md-4">
+    <!-- Payment Proofs -->
+    <% if (transaction.proofs && transaction.proofs.length > 0) { %>
+      <div class="card mb-4">
+        <div class="card-header">
+          <h5 class="mb-0">Payment Proofs</h5>
+        </div>
+        <div class="card-body">
+          <% transaction.proofs.forEach(proof => { %>
+            <div class="mb-3">
+              <div class="d-flex justify-content-between">
+                <div>
+                  <h6>Uploaded by:</h6>
+                  <p><%= proof.userId %></p>
+                </div>
+                <div>
+                  <h6>Date:</h6>
+                  <p><%= proof.uploadedAt %></p>
+                </div>
+              </div>
+              <div class="mt-2">
+                <a href="/api/transactions/proofs/<%= proof.imageId %>" target="_blank" class="btn btn-sm btn-primary">
+                  <i class="bi bi-image"></i> View Image
+                </a>
+              </div>
+            </div>
+            <hr />
+          <% }); %>
+        </div>
+      </div>
+    <% } %>
+    
+    <!-- Reports & Issues -->
+    <% if (transaction.reports && transaction.reports.length > 0) { %>
+      <div class="card mb-4">
+        <div class="card-header">
+          <h5 class="mb-0">Reported Issues</h5>
+        </div>
+        <div class="card-body">
+          <% transaction.reports.forEach(report => { %>
+            <div class="alert <%= report.status === 'pending' ? 'alert-warning' : 'alert-success' %>">
+              <div class="d-flex justify-content-between">
+                <strong><%= report.reason %></strong>
+                <span class="badge <%= report.status === 'pending' ? 'bg-warning text-dark' : 'bg-success' %>">
+                  <%= report.status %>
+                </span>
+              </div>
+              <p class="mb-1 mt-2"><%= report.details %></p>
+              <small class="text-muted">
+                Reported by 
+                <a href="/users/<%= report.userId %>"><%= report.userId %></a> 
+                on <%= report.timestamp %>
+              </small>
+              
+              <% if (report.status === 'pending') { %>
+                <div class="mt-2">
+                  <button class="btn btn-sm btn-success resolve-issue-btn" 
+                          data-tx-id="<%= transaction.id %>" 
+                          data-report-id="<%= report._id %>">
+                    <i class="bi bi-check-circle"></i> Mark as Resolved
+                  </button>
+                </div>
+              <% } %>
+            </div>
+          <% }); %>
+        </div>
+      </div>
+    <% } %>
+  </div>
+</div>
+
+<script>
+  // Update transaction status
+  document.querySelectorAll('.update-status-btn').forEach(btn => {
+    btn.addEventListener('click', async function() {
+      const txId = this.getAttribute('data-tx-id');
+      const status = this.getAttribute('data-status');
+      
+      if (!confirm(`Are you sure you want to change this transaction status to ${status}?`)) {
+        return;
+      }
+      
+      try {
+        const response = await fetch(`/transactions/${txId}/status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ status })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          alert('Status updated successfully');
+          location.reload();
+        } else {
+          alert(`Error: ${result.message}`);
+        }
+      } catch (err) {
+        alert('Error updating status');
+        console.error(err);
+      }
+    });
+  });
+  
+  // Cancel transaction
+  document.querySelectorAll('.cancel-tx-btn').forEach(btn => {
+    btn.addEventListener('click', async function() {
+      const txId = this.getAttribute('data-tx-id');
+      
+      if (!confirm('Are you sure you want to cancel this transaction?')) {
+        return;
+      }
+      
+      try {
+        const response = await fetch(`/transactions/${txId}/cancel`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          alert('Transaction cancelled successfully');
+          location.reload();
+        } else {
+          alert(`Error: ${result.message}`);
+        }
+      } catch (err) {
+        alert('Error cancelling transaction');
+        console.error(err);
+      }
+    });
+  });
+  
+  // Resolve reported issue
+  document.querySelectorAll('.resolve-issue-btn').forEach(btn => {
+    btn.addEventListener('click', async function() {
+      const txId = this.getAttribute('data-tx-id');
+      const reportId = this.getAttribute('data-report-id');
+      
+      if (!confirm('Are you sure you want to mark this issue as resolved?')) {
+        return;
+      }
+      
+      try {
+        const response = await fetch(`/transactions/${txId}/reports/${reportId}/resolve`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          alert('Issue marked as resolved');
+          location.reload();
+        } else {
+          alert(`Error: ${result.message}`);
+        }
+      } catch (err) {
+        alert('Error resolving issue');
+        console.error(err);
+      }
+    });
+  });
+</script>
+
+<style>
+  .timeline {
+    position: relative;
+    padding-left: 30px;
+    list-style: none;
+  }
+  
+  .timeline-item {
+    position: relative;
+    margin-bottom: 1.5rem;
+  }
+  
+  .timeline-marker {
+    position: absolute;
+    left: -30px;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background-color: #0d6efd;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.2);
+  }
+  
+  .timeline-marker::before {
+    content: '';
+    position: absolute;
+    left: 6px;
+    bottom: 0;
+    width: 3px;
+    height: 100%;
+    background-color: #e9ecef;
+  }
+  
+  .timeline-item:first-child .timeline-marker::before {
+    top: 0;
+  }
+  
+  .timeline-item:last-child .timeline-marker::before {
+    display: none;
+  }
+  
+  .timeline-title {
+    margin-bottom: 0.25rem;
+  }
+  
+  .timeline-date {
+    margin-bottom: 0.5rem;
+    color: #6c757d;
+    font-size: 0.875rem;
+  }
+  
+  .message-list {
+    max-height: 400px;
+    overflow-y: auto;
+  }
+  
+  .message-content {
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+    max-width: 80%;
+  }
+  
+  .initiator-msg {
+    background-color: #f8f9fa;
+  }
+  
+  .recipient-msg {
+    background-color: #e9ecef;
+  }
+</style>

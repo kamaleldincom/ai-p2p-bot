@@ -1,0 +1,328 @@
+<div class="card shadow-sm">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">User Management</h5>
+    <div>
+      <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#filterCollapse">
+        <i class="bi bi-funnel"></i> Filter
+      </button>
+    </div>
+  </div>
+  
+  <div class="collapse" id="filterCollapse">
+    <div class="card-body bg-light">
+      <form action="/users" method="GET" class="row g-3">
+        <div class="col-md-4">
+          <label for="name" class="form-label">Name</label>
+          <input type="text" class="form-control" id="name" name="name" value="<%= filters.name || '' %>">
+        </div>
+        <div class="col-md-3">
+          <label for="status" class="form-label">Status</label>
+          <select class="form-select" id="status" name="status">
+            <option value="">All</option>
+            <option value="active" <%= filters.status === 'active' ? 'selected' : '' %>>Active</option>
+            <option value="suspended" <%= filters.status === 'suspended' ? 'selected' : '' %>>Suspended</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label for="country" class="form-label">Country</label>
+          <select class="form-select" id="country" name="country">
+            <option value="">All</option>
+            <option value="UAE" <%= filters.country === 'UAE' ? 'selected' : '' %>>UAE</option>
+            <option value="SDN" <%= filters.country === 'SDN' ? 'selected' : '' %>>Sudan</option>
+            <option value="EGY" <%= filters.country === 'EGY' ? 'selected' : '' %>>Egypt</option>
+          </select>
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-search"></i> Search
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+  
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-striped">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Country</th>
+            <th>Referral Code</th>
+            <th>Trust Score</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (users.length === 0) { %>
+            <tr>
+              <td colspan="7" class="text-center py-3">No users found</td>
+            </tr>
+          <% } else { %>
+            <% users.forEach(user => { %>
+              <tr>
+                <td><%= user.id %></td>
+                <td><%= user.name %></td>
+                <td><%= user.country %></td>
+                <td><code><%= user.referralCode %></code></td>
+                <td>
+                  <div class="d-flex align-items-center">
+                    <div class="progress flex-grow-1" style="height: 6px;">
+                      <div class="progress-bar bg-success" role="progressbar" style="width: <%= Math.min(100, user.trustScore) %>%"></div>
+                    </div>
+                    <span class="ms-2"><%= user.trustScore %></span>
+                  </div>
+                </td>
+                <td>
+                  <% if (user.status === 'active') { %>
+                    <span class="badge bg-success">Active</span>
+                  <% } else { %>
+                    <span class="badge bg-danger">Suspended</span>
+                  <% } %>
+                </td>
+                <td>
+                  <div class="btn-group">
+                    <a href="/users/<%= user.id %>" class="btn btn-sm btn-outline-primary">
+                      <i class="bi bi-eye"></i>
+                    </a>
+                    <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown">
+                      <span class="visually-hidden">Toggle Dropdown</span>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                      <li>
+                        <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#adjustTrustModal" data-user-id="<%= user.id %>" data-user-name="<%= user.name %>">
+                          <i class="bi bi-arrow-up-circle"></i> Adjust Trust Score
+                        </a>
+                      </li>
+                      <li><hr class="dropdown-divider"></li>
+                      <li>
+                        <% if (user.status === 'active') { %>
+                          <a class="dropdown-item text-danger" href="#" data-bs-toggle="modal" data-bs-target="#statusModal" data-user-id="<%= user.id %>" data-user-name="<%= user.name %>" data-status="suspended">
+                            <i class="bi bi-x-circle"></i> Suspend User
+                          </a>
+                        <% } else { %>
+                          <a class="dropdown-item text-success" href="#" data-bs-toggle="modal" data-bs-target="#statusModal" data-user-id="<%= user.id %>" data-user-name="<%= user.name %>" data-status="active">
+                            <i class="bi bi-check-circle"></i> Activate User
+                          </a>
+                        <% } %>
+                      </li>
+                    </ul>
+                  </div>
+                </td>
+              </tr>
+            <% }); %>
+          <% } %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  
+  <% if (pagination.pages > 1) { %>
+    <div class="card-footer">
+      <nav>
+        <ul class="pagination justify-content-center mb-0">
+          <% if (pagination.page > 1) { %>
+            <li class="page-item">
+              <a class="page-link" href="/users?page=1&limit=<%= pagination.limit %>&name=<%= filters.name || '' %>&status=<%= filters.status || '' %>&country=<%= filters.country || '' %>">First</a>
+            </li>
+            <li class="page-item">
+              <a class="page-link" href="/users?page=<%= pagination.page - 1 %>&limit=<%= pagination.limit %>&name=<%= filters.name || '' %>&status=<%= filters.status || '' %>&country=<%= filters.country || '' %>">Previous</a>
+            </li>
+          <% } else { %>
+            <li class="page-item disabled">
+              <a class="page-link" href="#">First</a>
+            </li>
+            <li class="page-item disabled">
+              <a class="page-link" href="#">Previous</a>
+            </li>
+          <% } %>
+          
+          <% 
+            let startPage = Math.max(1, pagination.page - 2);
+            let endPage = Math.min(pagination.pages, pagination.page + 2);
+            
+            for (let i = startPage; i <= endPage; i++) { 
+          %>
+            <li class="page-item <%= i === pagination.page ? 'active' : '' %>">
+              <a class="page-link" href="/users?page=<%= i %>&limit=<%= pagination.limit %>&name=<%= filters.name || '' %>&status=<%= filters.status || '' %>&country=<%= filters.country || '' %>"><%= i %></a>
+            </li>
+          <% } %>
+          
+          <% if (pagination.page < pagination.pages) { %>
+            <li class="page-item">
+              <a class="page-link" href="/users?page=<%= pagination.page + 1 %>&limit=<%= pagination.limit %>&name=<%= filters.name || '' %>&status=<%= filters.status || '' %>&country=<%= filters.country || '' %>">Next</a>
+            </li>
+            <li class="page-item">
+              <a class="page-link" href="/users?page=<%= pagination.pages %>&limit=<%= pagination.limit %>&name=<%= filters.name || '' %>&status=<%= filters.status || '' %>&country=<%= filters.country || '' %>">Last</a>
+            </li>
+          <% } else { %>
+            <li class="page-item disabled">
+              <a class="page-link" href="#">Next</a>
+            </li>
+            <li class="page-item disabled">
+              <a class="page-link" href="#">Last</a>
+            </li>
+          <% } %>
+        </ul>
+      </nav>
+    </div>
+  <% } %>
+</div>
+
+<!-- Status Modal -->
+<div class="modal fade" id="statusModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Change User Status</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>Are you sure you want to change the status of <strong id="statusUserName"></strong>?</p>
+        <form id="statusForm">
+          <input type="hidden" id="statusUserId" name="userId">
+          <input type="hidden" id="newStatus" name="status">
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirmStatusBtn">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Adjust Trust Score Modal -->
+<div class="modal fade" id="adjustTrustModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Adjust Trust Score</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>Adjust trust score for <strong id="trustUserName"></strong>:</p>
+        <form id="trustForm">
+          <input type="hidden" id="trustUserId" name="userId">
+          <div class="mb-3">
+            <label for="adjustment" class="form-label">Adjustment</label>
+            <div class="input-group">
+              <button type="button" class="btn btn-outline-secondary" id="decrementBtn">-</button>
+              <input type="number" class="form-control text-center" id="adjustment" name="adjustment" value="0">
+              <button type="button" class="btn btn-outline-secondary" id="incrementBtn">+</button>
+            </div>
+            <div class="form-text">Enter a positive or negative value to adjust the trust score.</div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirmTrustBtn">Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    // Status modal
+    const statusModal = document.getElementById('statusModal');
+    if (statusModal) {
+      statusModal.addEventListener('show.bs.modal', function(event) {
+        const button = event.relatedTarget;
+        const userId = button.getAttribute('data-user-id');
+        const userName = button.getAttribute('data-user-name');
+        const status = button.getAttribute('data-status');
+        
+        document.getElementById('statusUserName').textContent = userName;
+        document.getElementById('statusUserId').value = userId;
+        document.getElementById('newStatus').value = status;
+        
+        const confirmBtn = document.getElementById('confirmStatusBtn');
+        confirmBtn.className = status === 'active' ? 'btn btn-success' : 'btn btn-danger';
+        confirmBtn.textContent = status === 'active' ? 'Activate' : 'Suspend';
+      });
+      
+      document.getElementById('confirmStatusBtn').addEventListener('click', function() {
+        const userId = document.getElementById('statusUserId').value;
+        const status = document.getElementById('newStatus').value;
+        
+        fetch(`/users/${userId}/status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ status })
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            window.location.reload();
+          } else {
+            alert(data.message || 'An error occurred');
+          }
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          alert('An error occurred while updating status');
+        });
+      });
+    }
+    
+    // Trust score modal
+    const trustModal = document.getElementById('adjustTrustModal');
+    if (trustModal) {
+      trustModal.addEventListener('show.bs.modal', function(event) {
+        const button = event.relatedTarget;
+        const userId = button.getAttribute('data-user-id');
+        const userName = button.getAttribute('data-user-name');
+        
+        document.getElementById('trustUserName').textContent = userName;
+        document.getElementById('trustUserId').value = userId;
+        document.getElementById('adjustment').value = 0;
+      });
+      
+      document.getElementById('incrementBtn').addEventListener('click', function() {
+        const input = document.getElementById('adjustment');
+        input.value = parseInt(input.value) + 1;
+      });
+      
+      document.getElementById('decrementBtn').addEventListener('click', function() {
+        const input = document.getElementById('adjustment');
+        input.value = parseInt(input.value) - 1;
+      });
+      
+      document.getElementById('confirmTrustBtn').addEventListener('click', function() {
+        const userId = document.getElementById('trustUserId').value;
+        const adjustment = document.getElementById('adjustment').value;
+        
+        if (adjustment === '0') {
+          alert('Please enter a non-zero adjustment value');
+          return;
+        }
+        
+        fetch(`/users/${userId}/trust-score`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ adjustment })
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            window.location.reload();
+          } else {
+            alert(data.message || 'An error occurred');
+          }
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          alert('An error occurred while adjusting trust score');
+        });
+      });
+    }
+  });
+</script>
