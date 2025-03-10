@@ -1,0 +1,88 @@
+<!-- Debug page for user info -->
+<div class="card">
+  <div class="card-header bg-info text-white">
+    <h5 class="mb-0">User Debug Information</h5>
+  </div>
+  <div class="card-body">
+    <p>Current Session Information:</p>
+    <pre class="bg-light p-3 rounded"><%= debugInfo %></pre>
+    
+    <hr>
+    
+    <div class="mt-3">
+      <h6>User Role Test:</h6>
+      <p>
+        <% if (user && user.role === 'superadmin') { %>
+          <span class="badge bg-success">You have superadmin privileges</span>
+        <% } else if (user && user.role === 'admin') { %>
+          <span class="badge bg-primary">You have admin privileges only</span>
+        <% } else { %>
+          <span class="badge bg-danger">You do not have sufficient privileges</span>
+        <% } %>
+      </p>
+    </div>
+    
+    <div class="mt-3">
+      <h6>API Test:</h6>
+      <div class="mb-3">
+        <button id="testApiBtn" class="btn btn-outline-primary">Test Currency API</button>
+        <div id="apiResult" class="mt-2"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.getElementById('testApiBtn').addEventListener('click', async function() {
+    const resultDiv = document.getElementById('apiResult');
+    resultDiv.innerHTML = '<div class="alert alert-info">Testing API...</div>';
+    
+    try {
+      // Create a simple test object
+      const testData = {
+        currencies: [
+          { code: 'TEST', name: 'Test Currency', symbol: 'T$', enabled: true }
+        ],
+        exchangeRates: {
+          'TEST_USD': 1.0
+        }
+      };
+      
+      // Send the request
+      const response = await fetch('/settings/currencies', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(testData)
+      });
+      
+      // Get the response
+      const responseData = await response.json();
+      
+      // Display the result
+      if (response.ok) {
+        resultDiv.innerHTML = `
+          <div class="alert alert-success">
+            <h6>API Response (${response.status} ${response.statusText}):</h6>
+            <pre>${JSON.stringify(responseData, null, 2)}</pre>
+          </div>
+        `;
+      } else {
+        resultDiv.innerHTML = `
+          <div class="alert alert-danger">
+            <h6>API Error (${response.status} ${response.statusText}):</h6>
+            <pre>${JSON.stringify(responseData, null, 2)}</pre>
+          </div>
+        `;
+      }
+    } catch (error) {
+      resultDiv.innerHTML = `
+        <div class="alert alert-danger">
+          <h6>Error:</h6>
+          <p>${error.message}</p>
+        </div>
+      `;
+    }
+  });
+</script>

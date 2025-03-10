@@ -39,7 +39,12 @@ router.post('/currencies', requireRole(['superadmin']), async (req, res) => {
   try {
     const { currencies, exchangeRates } = req.body;
     
+    console.log('Received currency update request from:', req.session.user.username);
+    console.log('Currencies data:', JSON.stringify(currencies));
+    console.log('Exchange rates data:', JSON.stringify(exchangeRates));
+    
     if (!currencies || !Array.isArray(currencies)) {
+      console.error('Invalid currencies data - not an array');
       return res.status(400).json({
         success: false,
         message: 'Invalid currencies data'
@@ -49,6 +54,7 @@ router.post('/currencies', requireRole(['superadmin']), async (req, res) => {
     // Validate currency data
     for (const currency of currencies) {
       if (!currency.code || !currency.name || !currency.symbol) {
+        console.error('Invalid currency data:', currency);
         return res.status(400).json({
           success: false,
           message: 'Each currency must have code, name, and symbol'
@@ -58,12 +64,15 @@ router.post('/currencies', requireRole(['superadmin']), async (req, res) => {
     
     // Update config file
     config.supportedCurrencies = currencies;
+    console.log('Updated supportedCurrencies in config');
     
     if (exchangeRates && typeof exchangeRates === 'object') {
       config.exchangeRates = exchangeRates;
+      console.log('Updated exchangeRates in config');
     }
     
     await saveConfig();
+    console.log('Config saved successfully');
     
     res.json({
       success: true,
@@ -231,16 +240,54 @@ router.delete('/admins/:username', requireRole(['superadmin']), async (req, res)
  */
 async function saveConfig() {
   return new Promise((resolve, reject) => {
-    // Create config string
-    const configString = `/**
+    try {
+      // Check if the file is writable
+      fs.access(CONFIG_PATH, fs.constants.W_OK, (err) => {
+        if (err) {
+          console.error('Config file is not writable:', err);
+          return reject(new Error('Config file is not writable: ' + err.message));
+        }
+        
+        // Create config string
+        const configString = `/**
  * Admin dashboard configuration
  */
 module.exports = ${JSON.stringify(config, null, 2).replace(/"([^"]+)":/g, '$1:')};`;
-    
-    fs.writeFile(CONFIG_PATH, configString, 'utf8', (err) => {
-      if (err) return reject(err);
-      resolve();
-    });
+        
+        console.log('Writing config to file:', CONFIG_PATH);
+        console.log('Config string length:', configString.length);
+        
+        // First backup the current config
+        const backupPath = `${CONFIG_PATH}.backup`;
+        fs.copyFile(CONFIG_PATH, backupPath, (backupErr) => {
+          if (backupErr) {
+            console.warn('Could not create backup of config file:', backupErr);
+            // Continue even if backup fails
+          } else {
+            console.log('Backup created at:', backupPath);
+          }
+          
+          // Now write the new config
+          fs.writeFile(CONFIG_PATH, configString, 'utf8', (writeErr) => {
+            if (writeErr) {
+              console.error('Error writing config file:', writeErr);
+              return reject(writeErr);
+            }
+            
+            console.log('Config file successfully written');
+            
+            // Clear require cache so changes take effect immediately
+            delete require.cache[require.resolve('../config')];
+            console.log('Require cache cleared for config');
+            
+            resolve();
+          });
+        });
+      });
+    } catch (err) {
+      console.error('Unexpected error in saveConfig:', err);
+      reject(err);
+    }
   });
 }
 

@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../../src/models/user');
 const Transaction = require('../../src/models/transaction');
+const config = require('../config');
 
 /**
  * Dashboard home page with stats
@@ -55,6 +56,26 @@ router.get('/', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+/**
+ * Debug route to check user permissions
+ */
+router.get('/debug-user', (req, res) => {
+  const sessionInfo = {
+    authenticated: req.session.authenticated || false,
+    user: req.session.user || 'Not logged in',
+    availableAdmins: Object.keys(config.adminUsers).map(username => ({
+      username,
+      role: config.adminUsers[username].role
+    }))
+  };
+  
+  res.render('dashboard/debug', {
+    title: 'Debug User Info',
+    debugInfo: JSON.stringify(sessionInfo, null, 2),
+    user: req.session.user
+  });
 });
 
 module.exports = router;

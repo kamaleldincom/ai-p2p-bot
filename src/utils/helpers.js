@@ -47,6 +47,21 @@ function formatCurrency(amount, currency) {
  * Get currency symbol
  */
 function getCurrencySymbol(currency) {
+  try {
+    // Try to get currencies from the admin config
+    const adminConfig = require('../../admin/config');
+    
+    if (adminConfig && adminConfig.supportedCurrencies) {
+      const currencyObj = adminConfig.supportedCurrencies.find(c => c.code === currency);
+      if (currencyObj && currencyObj.symbol) {
+        return currencyObj.symbol;
+      }
+    }
+  } catch (error) {
+    console.error('Error loading admin config for currency symbols:', error);
+  }
+  
+  // Fallback to hardcoded symbols
   const symbols = {
     'AED': 'د.إ',
     'SDG': 'ج.س',
@@ -66,7 +81,7 @@ function getSupportedCurrencies() {
     
     if (adminConfig && adminConfig.supportedCurrencies) {
       return adminConfig.supportedCurrencies
-        .filter(c => c.enabled)
+        .filter(c => c.enabled !== false) // Check if enabled isn't explicitly false
         .map(c => c.code);
     }
   } catch (error) {
