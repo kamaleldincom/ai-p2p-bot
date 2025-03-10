@@ -511,34 +511,78 @@ async function initiateMatchRequest(userId, transactionId, partnerTransactionId)
  */
 async function confirmMatchRequest(userId, transactionId, accept) {
   try {
-    // Find the user's transaction
+    // Try to find the user's transaction directly by ID first
     const userTransaction = await Transaction.findOne({ 
       transactionId,
-      'initiator.userId': userId.toString(),
-      status: 'open'
+      'initiator.userId': userId.toString()
     });
     
     if (!userTransaction) {
-      return { success: false, message: "Your transaction not found or not in open status" };
+      console.log(`Transaction ${transactionId} not found for user ${userId}`);
+      return { success: false, message: "Your transaction not found" };
+    }
+    
+    // Log the transaction status for debugging
+    console.log(`User transaction status: ${userTransaction.status}`);
+    
+    // For a user confirming a match, their transaction should be in 'open' status
+    // But we also need to handle the case where this might be the recipient confirming a match request
+    if (userTransaction.status !== 'open' && userTransaction.status !== 'pending_match') {
+      return { success: false, message: "Your transaction is not in a state that can be matched" };
     }
     
     // Find the partner's transaction that requested the match
-    const partnerTransaction = await Transaction.findOne({ 
-      'recipient.userId': userId.toString(),
-      'status': 'pending_match'
-    });
+    // This could be either the partner's transaction with recipient.userId matching this user,
+    // or it could be the pendingPartnerTransactionId in the user's own transaction
+    let partnerTransaction;
+    
+    if (userTransaction.status === 'pending_match' && userTransaction.pendingPartnerTransactionId) {
+      // This user's transaction is already in pending_match state, 
+      // which means they're the one receiving the match request
+      partnerTransaction = await Transaction.findOne({ 
+        transactionId: userTransaction.pendingPartnerTransactionId 
+      });
+      console.log('Finding partner transaction from pendingPartnerTransactionId');
+    } else {
+      // Otherwise, look for a transaction that has this user as the recipient
+      partnerTransaction = await Transaction.findOne({ 
+        'recipient.userId': userId.toString(),
+        'status': 'pending_match'
+      });
+      console.log('Finding partner transaction based on recipient.userId');
+    }
     
     if (!partnerTransaction) {
       return { success: false, message: "No pending match request found" };
     }
     
     if (!accept) {
-      // Reject the match
-      partnerTransaction.recipient.userId = null;
-      partnerTransaction.status = 'open';
-      partnerTransaction.pendingPartnerTransactionId = null;
+      console.log('Rejecting match request');
       
-      await partnerTransaction.save();
+      // Reject the match - different flow depending on if this user is initiator or recipient
+      if (userTransaction.status === 'pending_match') {
+        // This user received the match request
+        userTransaction.status = 'open';
+        userTransaction.pendingPartnerTransactionId = null;
+        if (partnerTransaction) {
+          partnerTransaction.recipient.userId = null;
+          partnerTransaction.status = 'open';
+          
+          await Promise.all([
+            userTransaction.save(),
+            partnerTransaction.save()
+          ]);
+        } else {
+          await userTransaction.save();
+        }
+      } else {
+        // This user is rejecting a match they saw in the list
+        partnerTransaction.recipient.userId = null;
+        partnerTransaction.status = 'open';
+        partnerTransaction.pendingPartnerTransactionId = null;
+        
+        await partnerTransaction.save();
+      }
       
       return { success: true, accepted: false };
     }
@@ -546,61 +590,135 @@ async function confirmMatchRequest(userId, transactionId, accept) {
     // Accept the match - update both transactions using atomic operations
     const partnerTransactionId = partnerTransaction.transactionId;
     const currentTime = new Date();
-    const relationship = partnerTransaction.relationship === 'referrer' 
-      ? 'referee' 
-      : (partnerTransaction.relationship === 'referee' ? 'referrer' : 'sibling');
+    let relationship;
+    
+    // Determine relationship based on which transaction has it defined
+    if (partnerTransaction.relationship) {
+      relationship = partnerTransaction.relationship === 'referrer' 
+        ? 'referee' 
+        : (partnerTransaction.relationship === 'referee' ? 'referrer' : 'sibling');
+    } else if (userTransaction.relationship) {
+      relationship = userTransaction.relationship;
+    } else {
+      // Fallback - calculate relationship
+      const relationshipResult = await checkNetworkRelationship(
+        userId, 
+        partnerTransaction.initiator.userId
+      );
+      relationship = relationshipResult.valid ? relationshipResult.relationship : 'unknown';
+    }
+    
+    console.log(`Using relationship: ${relationship}`);
     
     try {
       // Use a session to ensure both updates happen or neither happens
       const session = await mongoose.startSession();
       
       await session.withTransaction(async () => {
-        // Update partner's transaction atomically
-        const updatedPartnerTx = await Transaction.findOneAndUpdate(
-          { 
-            transactionId: partnerTransactionId,
-            status: 'pending_match' // Ensure it's still in the expected state
-          },
-          { 
-            $set: {
-              status: 'matched',
-              'timestamps.matched': currentTime
-            }
-          },
-          { 
-            new: true,
-            session
-          }
-        );
+        console.log('Starting transaction with session for match confirmation');
         
-        if (!updatedPartnerTx) {
-          throw new Error("Partner transaction no longer available for matching");
+        // Update based on which direction the match is going
+        if (userTransaction.status === 'pending_match') {
+          // User is confirming a match request sent to them
+          console.log('User is confirming a match request they received');
+          
+          // Update the user's transaction to matched
+          const updatedUserTx = await Transaction.findOneAndUpdate(
+            { 
+              transactionId: userTransaction.transactionId,
+              status: 'pending_match'  // Ensure it's still in pending state
+            },
+            { 
+              $set: {
+                status: 'matched',
+                'timestamps.matched': currentTime
+              }
+            },
+            { 
+              new: true,
+              session
+            }
+          );
+          
+          if (!updatedUserTx) {
+            throw new Error("Your transaction is no longer available for matching");
+          }
+          
+          // Update partner's transaction
+          const updatedPartnerTx = await Transaction.findOneAndUpdate(
+            { 
+              transactionId: partnerTransaction.transactionId
+            },
+            { 
+              $set: {
+                status: 'matched',
+                'timestamps.matched': currentTime
+              }
+            },
+            { 
+              new: true,
+              session
+            }
+          );
+          
+          if (!updatedPartnerTx) {
+            throw new Error("Partner transaction no longer available");
+          }
+        } else {
+          // User is initiating a match with another open transaction
+          console.log('User is initiating a match with another transaction');
+          
+          // Update partner's transaction atomically
+          const updatedPartnerTx = await Transaction.findOneAndUpdate(
+            { 
+              transactionId: partnerTransactionId,
+              status: 'pending_match' // Ensure it's still in the expected state
+            },
+            { 
+              $set: {
+                status: 'matched',
+                'timestamps.matched': currentTime
+              }
+            },
+            { 
+              new: true,
+              session
+            }
+          );
+          
+          if (!updatedPartnerTx) {
+            throw new Error("Partner transaction no longer available for matching");
+          }
+          
+          // Update user's transaction atomically
+          const updatedUserTx = await Transaction.findOneAndUpdate(
+            { 
+              transactionId: userTransaction.transactionId,
+              status: 'open'  // Ensure it's still in the expected state
+            },
+            { 
+              $set: {
+                'recipient.userId': partnerTransaction.initiator.userId,
+                status: 'matched',
+                relationship: relationship,
+                'timestamps.matched': currentTime
+              }
+            },
+            { 
+              new: true,
+              session
+            }
+          );
+          
+          if (!updatedUserTx) {
+            throw new Error("Your transaction is no longer available for matching");
+          }
         }
         
-        // Update user's transaction atomically
-        const updatedUserTx = await Transaction.findOneAndUpdate(
-          { 
-            transactionId: userTransaction.transactionId,
-            status: 'open'  // Ensure it's still in the expected state
-          },
-          { 
-            $set: {
-              'recipient.userId': partnerTransaction.initiator.userId,
-              status: 'matched',
-              relationship: relationship,
-              'timestamps.matched': currentTime
-            }
-          },
-          { 
-            new: true,
-            session
-          }
-        );
-        
-        if (!updatedUserTx) {
-          throw new Error("Your transaction is no longer available for matching");
-        }
       });
+      
+      console.log('Transaction completed successfully');
+      
       
       await session.endSession();
     } catch (error) {
@@ -609,7 +727,39 @@ async function confirmMatchRequest(userId, transactionId, accept) {
     }
     
     // Get partner details
-    const partner = await User.findOne({ userId: partnerTransaction.initiator.userId });
+    let partnerId, partnerUserId;
+    
+    // Determine which user is the partner based on transaction direction
+    if (userTransaction.status === 'matched' && userTransaction.pendingPartnerTransactionId) {
+      // User was confirming someone else's request
+      partnerId = partnerTransaction.initiator.userId;
+      partnerUserId = partnerId;
+    } else {
+      // User initiated the match
+      partnerId = partnerTransaction.initiator.userId;
+      partnerUserId = partnerId;
+    }
+    
+    const partner = await User.findOne({ userId: partnerId });
+    
+    if (!partner) {
+      console.error(`Partner with ID ${partnerId} not found`);
+      return { 
+        success: true, 
+        accepted: true,
+        match: {
+          transactionId: userTransaction.transactionId,
+          partnerTransactionId: partnerTransactionId,
+          partnerId: partnerId,
+          partnerName: "Unknown",
+          relationship: relationship || "unknown",
+          amount: userTransaction.initiator.amount,
+          currency: userTransaction.initiator.currency,
+        }
+      };
+    }
+    
+    console.log(`Found partner: ${partner.name}`);
     
     return {
       success: true,
@@ -619,13 +769,13 @@ async function confirmMatchRequest(userId, transactionId, accept) {
         partnerTransactionId: partnerTransactionId,
         partnerId: partner.userId,
         partnerName: partner.name,
-        partnerTrustScore: partner.trustScore,
-        relationship: userTransaction.relationship,
+        partnerTrustScore: partner.trustScore || 0,
+        relationship: relationship || "unknown",
         amount: userTransaction.initiator.amount,
         currency: userTransaction.initiator.currency,
         partnerAmount: partnerTransaction.initiator.amount,
         partnerCurrency: partnerTransaction.initiator.currency,
-        rate: partnerTransaction.rate
+        rate: partnerTransaction.rate || userTransaction.rate
       }
     };
   } catch (error) {
