@@ -57,9 +57,25 @@ function getCurrencySymbol(currency) {
 }
 
 /**
- * List of supported currencies
+ * Get list of supported currencies from admin config
  */
-const SUPPORTED_CURRENCIES = ['AED', 'SDG', 'EGP'];
+function getSupportedCurrencies() {
+  try {
+    // Try to get currencies from the admin config
+    const adminConfig = require('../../admin/config');
+    
+    if (adminConfig && adminConfig.supportedCurrencies) {
+      return adminConfig.supportedCurrencies
+        .filter(c => c.enabled)
+        .map(c => c.code);
+    }
+  } catch (error) {
+    console.error('Error loading admin config for currencies:', error);
+  }
+  
+  // Fallback to hardcoded currencies
+  return ['AED', 'SDG', 'EGP'];
+}
 
 /**
  * Parse amount from text
@@ -75,6 +91,9 @@ function parseAmountAndCurrency(text) {
   }
   
   console.log(`Parsing amount from: "${text}"`);
+  
+  // Get supported currencies
+  const SUPPORTED_CURRENCIES = getSupportedCurrencies();
   
   // Different regex patterns to try
   const patterns = [
@@ -101,7 +120,7 @@ function parseAmountAndCurrency(text) {
       }
       
       // Use the matched currency or default to a common one
-      let currency = match[2] ? match[2].toUpperCase() : 'AED';
+      let currency = match[2] ? match[2].toUpperCase() : SUPPORTED_CURRENCIES[0] || 'AED';
       
       // Check if currency is supported
       if (!SUPPORTED_CURRENCIES.includes(currency)) {
@@ -110,8 +129,8 @@ function parseAmountAndCurrency(text) {
           // If there was an explicit currency that's not supported, return null
           return null;
         }
-        // Default to AED for patterns without currency
-        currency = 'AED';
+        // Default to first supported currency for patterns without currency
+        currency = SUPPORTED_CURRENCIES[0] || 'AED';
       }
       
       console.log(`Successfully parsed: amount=${amount}, currency=${currency}`);

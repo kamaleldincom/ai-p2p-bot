@@ -1,0 +1,56 @@
+/* 
+ * Admin Dashboard Styles
+ */
+
+/* Dashboard cards */
+.card {
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+/* Status badges */
+.badge {
+  font-weight: 500;
+  padding: 0.4em 0.7em;
+}
+
+/* Tables */
+.table th {
+  font-weight: 600;
+  color: #495057;
+}
+
+/* Forms */
+.form-control:focus, .form-select:focus {
+  border-color: #4e73df;
+  box-shadow: 0 0 0 0.2rem rgba(78, 115, 223, 0.25);
+}
+
+/* Login page */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Pagination */
+.page-item.active .page-link {
+  background-color: #4e73df;
+  border-color: #4e73df;
+}
+
+.page-link {
+  color: #4e73df;
+}
+
+/* Sidebar */
+.sidebar {
+  min-height: 100vh;
+}

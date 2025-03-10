@@ -894,10 +894,24 @@ Reply with the number of your choice or type the currency code.`;
 }
 
 /**
- * Get default exchange rate for currency pair
+ * Get default exchange rate for currency pair from admin config
  */
 async function getDefaultRate(fromCurrency, toCurrency) {
-  // Default rates for currency pairs
+  try {
+    // Try to get rates from the admin config
+    const adminConfig = require('../../admin/config');
+    
+    if (adminConfig && adminConfig.exchangeRates) {
+      const pair = `${fromCurrency}_${toCurrency}`;
+      if (adminConfig.exchangeRates[pair]) {
+        return adminConfig.exchangeRates[pair];
+      }
+    }
+  } catch (error) {
+    console.error('Error loading admin config for exchange rates:', error);
+  }
+  
+  // Fallback to hardcoded rates if admin config not available
   const defaultRates = {
     'AED_SDG': 13.5,
     'AED_EGP': 8.5,

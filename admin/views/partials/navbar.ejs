@@ -1,0 +1,67 @@
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+  <div class="container">
+    <a class="navbar-brand" href="/dashboard">
+      <i class="bi bi-currency-exchange"></i> P2P Admin
+    </a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="navbarNav">
+      <ul class="navbar-nav me-auto">
+        <li class="nav-item">
+          <a class="nav-link" href="/dashboard">
+            <i class="bi bi-speedometer"></i> Dashboard
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="/users">
+            <i class="bi bi-people"></i> Users
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="/transactions">
+            <i class="bi bi-arrow-left-right"></i> Transactions
+          </a>
+        </li>
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+            <i class="bi bi-gear"></i> Settings
+          </a>
+          <ul class="dropdown-menu">
+            <li>
+              <a class="dropdown-item" href="/settings/currencies">
+                <i class="bi bi-cash-coin"></i> Currencies
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item" href="/settings/payment-methods">
+                <i class="bi bi-credit-card"></i> Payment Methods
+              </a>
+            </li>
+            <% if (user.role === 'superadmin') { %>
+              <li>
+                <a class="dropdown-item" href="/settings/admins">
+                  <i class="bi bi-shield-lock"></i> Admin Users
+                </a>
+              </li>
+            <% } %>
+          </ul>
+        </li>
+      </ul>
+      <div class="navbar-nav">
+        <div class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+            <i class="bi bi-person-circle"></i> <%= user.username %>
+          </a>
+          <ul class="dropdown-menu dropdown-menu-end">
+            <li>
+              <a class="dropdown-item" href="/logout">
+                <i class="bi bi-box-arrow-right"></i> Logout
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</nav>
