@@ -126,11 +126,19 @@ async function handleMessage(ctx) {
 
       // Check if this is a match confirmation response
       if (ctx.state.awaitingMatchConfirmation) {
+        console.log(`Match confirmation detected for transaction: ${ctx.state.transactionToConfirm}`);
+        
         if (message.toLowerCase() === 'yes' || message.toLowerCase() === 'accept') {
+          console.log('User accepted match, calling handleMatchConfirmation with true');
           await handleMatchConfirmation(ctx, true);
           return;
         } else if (message.toLowerCase() === 'no' || message.toLowerCase() === 'reject') {
+          console.log('User rejected match, calling handleMatchConfirmation with false');
           await handleMatchConfirmation(ctx, false);
+          return;
+        } else {
+          // For any other input when awaiting confirmation, provide guidance
+          await ctx.reply("Please respond with 'yes' to accept the match request or 'no' to decline it.");
           return;
         }
       }
@@ -674,6 +682,26 @@ async function handleMatchConfirmation(ctx, accept) {
     const userId = ctx.state.userId;
     const conversations = ctx.state.conversations;
     
+    console.log(`Handling match confirmation: userId=${userId}, txId=${ctx.state.transactionToConfirm}, accept=${accept}`);
+    
+    // Validate that we have the transaction ID
+    if (!ctx.state.transactionToConfirm) {
+      console.error('Missing transaction ID for confirmation');
+      await ctx.reply("Sorry, I couldn't find the transaction to confirm. Please try using /transfer to check your active transactions.");
+      ctx.state.awaitingMatchConfirmation = false;
+      return;
+    }
+    
+    // Verify the transaction exists and is in the right state
+    const activeTransaction = await transactionService.getActiveTransaction(userId);
+    if (!activeTransaction.exists || activeTransaction.transaction.status !== 'pending_match') {
+      console.error(`Transaction not found or in wrong state: ${activeTransaction?.transaction?.status}`);
+      await ctx.reply("Sorry, this transaction is no longer available for confirmation.");
+      ctx.state.awaitingMatchConfirmation = false;
+      ctx.state.transactionToConfirm = null;
+      return;
+    }
+    
     // Confirm or reject the match
     const result = await transactionService.confirmMatchRequest(
       userId,
@@ -681,11 +709,14 @@ async function handleMatchConfirmation(ctx, accept) {
       accept
     );
     
+    console.log('Confirmation result:', result);
+    
     // Reset state
     ctx.state.awaitingMatchConfirmation = false;
     ctx.state.transactionToConfirm = null;
     
     if (!result.success) {
+      console.error('Confirmation failed:', result.message || result.error);
       await ctx.reply(`Failed to process match confirmation: ${result.message || result.error}`);
       return;
     }
@@ -917,9 +948,21 @@ async function provideTradeSummary(ctx) {
           activeTransaction.transaction.pendingConfirmation) {
         welcomeMessage += `⚠️ You have a pending match request! Please respond with "yes" to accept or "no" to decline.\n\n`;
         
-        // Set state to await confirmation
+        // Set state to await confirmation, with all necessary details
         ctx.state.awaitingMatchConfirmation = true;
         ctx.state.transactionToConfirm = activeTransaction.transaction.transactionId;
+        
+        // Find the initiator's details for later notifications
+        const pendingPartnerTxId = activeTransaction.transaction.pendingPartnerTransactionId;
+        if (pendingPartnerTxId) {
+          console.log(`Setting partner transaction ID: ${pendingPartnerTxId}`);
+          const pendingTx = await transactionService.getTransactionById(pendingPartnerTxId);
+          if (pendingTx) {
+            ctx.state.partnerUserId = pendingTx.initiatorId;
+            ctx.state.partnerTransactionId = pendingPartnerTxId;
+            console.log(`Setting partner user ID: ${ctx.state.partnerUserId}`);
+          }
+        }
       }
       
       // If transaction has messages, show unread count
@@ -1475,9 +1518,21 @@ Please respond with "yes" to accept or "no" to decline.`;
             content: message
           });
           
-          // Set state to await confirmation
+          // Set state to await confirmation with partner details
           ctx.state.awaitingMatchConfirmation = true;
           ctx.state.transactionToConfirm = activeTransaction.transaction.transactionId;
+          
+          // Find the initiator's details for later notifications
+          const pendingPartnerTxId = activeTransaction.transaction.pendingPartnerTransactionId;
+          if (pendingPartnerTxId) {
+            console.log(`Setting partner transaction ID: ${pendingPartnerTxId}`);
+            const pendingTx = await transactionService.getTransactionById(pendingPartnerTxId);
+            if (pendingTx) {
+              ctx.state.partnerUserId = pendingTx.initiatorId;
+              ctx.state.partnerTransactionId = pendingPartnerTxId;
+              console.log(`Setting partner user ID: ${ctx.state.partnerUserId}`);
+            }
+          }
           
           await ctx.reply(message);
           return;
