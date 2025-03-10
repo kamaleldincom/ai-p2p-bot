@@ -6,6 +6,7 @@ const express = require('express');
 const session = require('express-session');
 const mongoose = require('mongoose');
 const path = require('path');
+const expressLayouts = require('express-ejs-layouts');
 const config = require('./config');
 const authMiddleware = require('./middleware/auth');
 
@@ -20,9 +21,13 @@ mongoose.connect(process.env.MONGODB_URI)
 // Create Express app
 const app = express();
 
-// Set view engine
+// Set view engine with layouts
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+app.use(expressLayouts);
+app.set('layout', 'partials/layout');
+app.set("layout extractScripts", true);
+app.set("layout extractStyles", true);
 
 // Middleware
 app.use(express.json());
